@@ -16,7 +16,9 @@ import (
 	"nexusgo/internal/config"
 	"nexusgo/internal/core"
 	"nexusgo/internal/core/idempotency"
+	"nexusgo/internal/core/jobmanager"
 	"nexusgo/internal/integrations/mock"
+	"nexusgo/internal/jobs"
 	"nexusgo/internal/logging"
 	"nexusgo/internal/storage/sqlite"
 )
@@ -44,12 +46,17 @@ func main() {
 		os.Exit(1)
 	}
 
-	reg := buildRegistry()
+	inboxStore := sqlite.NewSimulatedInboxStore(db)
+	reg := buildRegistry(inboxStore)
 	catalogStore := sqlite.NewCatalogStore(db)
 	if err := catalogStore.Sync(ctx, reg.List()); err != nil {
 		logger.Error("no se pudo sincronizar el catálogo de integraciones", "error", err)
 		os.Exit(1)
 	}
+
+	auditStore := sqlite.NewAuditStore(db)
+	jobStore := sqlite.NewJobStore(db)
+	jobManager := jobmanager.NewManager(jobStore, auditStore, cfg.JobConcurrency, logger)
 
 	router := api.NewRouter(api.Deps{
 		Logger:       logger,
@@ -58,8 +65,10 @@ func main() {
 		ClientStore:  clientStore,
 		JWTSecret:    []byte(cfg.JWTSecret),
 		TokenTTL:     cfg.TokenTTL,
-		AuditStore:   sqlite.NewAuditStore(db),
+		AuditStore:   auditStore,
 		Idempotency:  idempotency.NewStore(cfg.IdempotencyTTL),
+		JobStore:     jobStore,
+		JobManager:   jobManager,
 		ReadyChecks: []handlers.ReadyCheck{
 			func() error {
 				pingCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -98,10 +107,15 @@ func main() {
 // buildRegistry da de alta las integraciones disponibles — ver
 // docs/02-arquitectura.md §2.4. Las integraciones reales (AMD, SAP) se
 // agregan aquí a medida que se implementan (Fases 6-8 del plan de trabajo).
-func buildRegistry() *core.Registry {
+// mock-batch-pull y mock-batch-push comparten la misma lógica
+// (internal/integrations/mock.BatchIntegration) pero demuestran las dos
+// modalidades de entrega — ver docs/05-patron-asincrono.md §5.5.
+func buildRegistry(inbox mock.SimulatedInbox) *core.Registry {
 	reg := core.NewRegistry()
 
 	reg.Register(mock.NewEchoIntegration())
+	reg.Register(mock.NewBatchIntegration("mock-batch-pull", jobs.DeliveryPullAPI, inbox))
+	reg.Register(mock.NewBatchIntegration("mock-batch-push", jobs.DeliveryPushDB, inbox))
 
 	return reg
 }
@@ -114,7 +128,11 @@ func seedClients(ctx context.Context, store *sqlite.ClientStore, cfg *config.Con
 	return store.Upsert(ctx, auth.Client{
 		ID:         "sgp",
 		APIKeyHash: auth.HashAPIKey(cfg.SGPAPIKey),
-		Scopes:     []string{"integration:mock-echo:invoke"},
-		Status:     auth.ClientStatusActive,
+		Scopes: []string{
+			"integration:mock-echo:invoke",
+			"integration:mock-batch-pull:invoke",
+			"integration:mock-batch-push:invoke",
+		},
+		Status: auth.ClientStatusActive,
 	})
 }

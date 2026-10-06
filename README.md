@@ -25,8 +25,9 @@ Variables de entorno (todas opcionales en ambiente `dev`; `NEXUS_JWT_SECRET` y `
 | `NEXUS_JWT_SECRET` | clave insegura de desarrollo | Clave HS256 para firmar los JWT (ver `docs/06-autenticacion-seguridad.md`). |
 | `NEXUS_TOKEN_TTL_SECONDS` | `900` | Duración del JWT emitido por `/api/v1/auth/token`. |
 | `NEXUS_SGP_API_KEY` | `sgp-dev-local-key` | API Key del cliente `sgp`, sembrado en SQLite en cada arranque. |
+| `NEXUS_JOB_CONCURRENCY` | `5` | Cantidad máxima de jobs asíncronos ejecutándose en paralelo. |
 
-### Probar la autenticación localmente
+### Probar la autenticación y la integración síncrona de prueba
 
 ```bash
 # 1. Obtener un token
@@ -39,6 +40,27 @@ curl -s -X POST http://localhost:8080/api/v1/integrations/mock-echo/send \
   -H "Authorization: Bearer <access_token>" -H "Content-Type: application/json" \
   -d '{"source_system":"SGP","timestamp":"2026-10-06T14:32:00Z","payload":{"hola":"mundo"}}'
 ```
+
+### Probar el patrón asíncrono (mock-batch-pull / mock-batch-push)
+
+```bash
+# 1. Disparar un job (fail_every fuerza algunos ítems fallidos -> PARTIAL)
+curl -s -X POST http://localhost:8080/api/v1/integrations/mock-batch-pull/send \
+  -H "Authorization: Bearer <access_token>" -H "Content-Type: application/json" \
+  -d '{"source_system":"SGP","timestamp":"2026-10-06T14:32:00Z","payload":{"total_items":4,"fail_every":2}}'
+# -> 202 Accepted con job_id y status_url
+
+# 2. Hacer polling del estado
+curl -s http://localhost:8080/api/v1/jobs/<job_id> -H "Authorization: Bearer <access_token>"
+
+# 3. Una vez terminado (COMPLETED/FAILED/PARTIAL), obtener el detalle
+curl -s http://localhost:8080/api/v1/jobs/<job_id>/result -H "Authorization: Bearer <access_token>"
+
+# 4. Confirmar que ya se consumió el resultado
+curl -s -X POST http://localhost:8080/api/v1/jobs/<job_id>/ack -H "Authorization: Bearer <access_token>"
+```
+
+`mock-batch-push` usa el mismo contrato pero simula el modo `delivery_mode=push_db`: no expone `result_url` y en cambio inserta los registros exitosos en una tabla SQLite `sgp_simulated_inbox` que hace las veces de la base de datos de SGP (ver `docs/05-patron-asincrono.md` §5.5).
 
 Comandos útiles:
 

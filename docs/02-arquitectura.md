@@ -63,11 +63,15 @@ nexusgo/
 │   │       └── ratelimit.go
 │   ├── core/
 │   │   ├── registry.go               # registro de integraciones disponibles
-│   │   ├── integration.go            # interfaz Integration (contrato)
+│   │   ├── integration.go            # interfaces Integration / AsyncIntegration
 │   │   ├── envelope.go               # structs del envelope genérico
+│   │   ├── catalog.go                # CatalogStore (GET /integrations)
+│   │   ├── idempotency/              # deduplicación por correlation_id (Fase 3)
 │   │   └── jobmanager/
-│   │       ├── manager.go            # ciclo de vida de jobs asíncronos
-│   │       └── worker_pool.go        # pool de workers para procesar jobs
+│   │       └── manager.go            # orquesta la ejecución de jobs asíncronos
+│   ├── jobs/
+│   │   ├── jobs.go                   # tipos Job/Item/Run + interfaz Store
+│   │   └── inmemory.go               # implementación en memoria (pruebas)
 │   ├── integrations/
 │   │   ├── amd/
 │   │   │   ├── amd.go                 # implementa core.Integration
@@ -125,11 +129,13 @@ const (
 )
 
 type Metadata struct {
-    ID          string    // ej. "sgp-to-amd-envio-minuta"
-    Name        string
-    Direction   Direction
-    Mode        Mode
-    Version     string
+    ID             string    // ej. "sgp-to-amd-envio-minuta"
+    Name           string
+    Direction      Direction
+    Mode           Mode
+    Version        string
+    ExternalSystem string
+    DeliveryMode   jobs.DeliveryMode // solo relevante cuando Mode == ModeAsync
 }
 
 type SendRequest struct {
@@ -150,13 +156,16 @@ type Integration interface {
     HandleSend(ctx context.Context, req SendRequest) (SendResult, error)
 }
 
-// AsyncIntegration es implementada opcionalmente por integraciones de modo ASYNC,
-// y es invocada por el Job Manager para ejecutar el trabajo real en background.
+// AsyncIntegration es implementada por integraciones de modo ASYNC, y es
+// invocada por el Job Manager (internal/core/jobmanager) para ejecutar el
+// trabajo real en background.
 type AsyncIntegration interface {
     Integration
-    Execute(ctx context.Context, job *jobmanager.Job) error
+    Execute(run *jobs.Run) error
 }
 ```
+
+> **Nota de diseño — por qué `jobs.Run` y no `jobmanager.Job`**: el tipo del job vive en un paquete independiente, `internal/jobs` (no dentro de `internal/core` ni de `internal/core/jobmanager`). Si `Job`/`Run` vivieran en `jobmanager`, `core` tendría que importar `jobmanager` para definir `AsyncIntegration.Execute(...)`, pero `jobmanager` ya necesita importar `core` para invocar `core.AsyncIntegration` — un ciclo de importación, que Go no permite. Con `internal/jobs` como paquete aparte (sin dependencias hacia `core` ni hacia `jobmanager`), `core` lo importa para declarar `AsyncIntegration`, y `jobmanager` importa tanto `core` como `jobs` sin que se forme ningún ciclo. `jobs.Run` expone `ReportProgress`/`AddItem` como métodos sobre closures inyectados por `jobmanager` al construirlo (`jobs.NewRun`), de modo que la integración reporta avance sin conocer el almacenamiento subyacente. Esta decisión se discutió explícitamente en la Fase 1 y se resolvió al implementar la Fase 5 — ver docs/10-plan-de-trabajo-poc.md.
 
 ## 2.4 Registro de integraciones
 
@@ -186,6 +195,8 @@ Para evitar que cada integración reimplemente lógica de bajo nivel, `internal/
 - **`dbclient`**: wrapper sobre `database/sql` (o driver específico) para integraciones que requieren conexión directa a base de datos externa, con manejo de pool de conexiones y timeouts.
 
 Cada integración específica (ej. `internal/integrations/amd`) usa estos adaptadores y les agrega la lógica propia del sistema externo: endpoints, formato de autenticación, mapeo de campos.
+
+> **Nota de la Fase 5**: `internal/adapters/dbclient` todavía no se implementó como el wrapper genérico descrito arriba. Para simular el modo de entrega `push_db` sin acceso real a SGP, se definió una interfaz mínima y específica (`mock.SimulatedInbox`, implementada por `internal/storage/sqlite.SimulatedInboxStore` sobre una tabla `sgp_simulated_inbox` en la misma base SQLite de la PoC) — ver docs/05-patron-asincrono.md §5.5(a) y docs/10-plan-de-trabajo-poc.md Fase 5. Cuando exista acceso real a una base de datos externa, esa simulación se reemplaza por un `dbclient` genérico como el planteado aquí.
 
 ## 2.6 Decisiones técnicas sugeridas
 

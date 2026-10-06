@@ -3,6 +3,8 @@
 // y los errores estándar del dominio.
 package core
 
+import "nexusgo/internal/jobs"
+
 type Direction string
 
 const (
@@ -28,4 +30,7 @@ type Metadata struct {
 	Mode           Mode
 	Version        string
 	ExternalSystem string
+	// DeliveryMode solo aplica cuando Mode == ModeAsync y Direction es
+	// INBOUND/BIDIRECTIONAL — ver docs/05-patron-asincrono.md §5.5.
+	DeliveryMode jobs.DeliveryMode
 }

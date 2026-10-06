@@ -156,6 +156,7 @@ Todas las respuestas de error siguen la misma forma:
 | 403 | `FORBIDDEN` | El cliente autenticado no tiene permiso sobre esa integración. |
 | 404 | `INTEGRATION_NOT_FOUND` | El `integration_id` no existe en el registro. |
 | 404 | `JOB_NOT_FOUND` | El `job_id` no existe o ya fue purgado. |
+| 409 | `JOB_NOT_FINISHED` | Se pidió `GET /jobs/{id}/result` pero el job todavía no llegó a un estado terminal (`PENDING`/`RUNNING`). |
 | 409 | `DUPLICATE_REQUEST` | Se detectó un `correlation_id` ya procesado (idempotencia, ver §3.9). |
 | 422 | `BUSINESS_RULE_REJECTED` | El sistema externo rechazó la solicitud por una regla de negocio propia (ej. dato duplicado). |
 | 429 | `RATE_LIMITED` | Se superó el límite de solicitudes configurado para el cliente o la integración. |

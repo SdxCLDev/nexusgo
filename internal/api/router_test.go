@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -18,6 +19,8 @@ import (
 	"nexusgo/internal/auth"
 	"nexusgo/internal/core"
 	"nexusgo/internal/core/idempotency"
+	"nexusgo/internal/core/jobmanager"
+	"nexusgo/internal/jobs"
 )
 
 var testJWTSecret = []byte("test-secret")
@@ -63,6 +66,38 @@ func (b *blockingIntegration) HandleSend(ctx context.Context, req core.SendReque
 	return core.SendResult{Status: "SUCCESS", Data: map[string]any{"ok": true}}, nil
 }
 
+// asyncStubIntegration permite a cada test controlar exactamente qué hace
+// Execute (reportar progreso, agregar ítems, fallar, paniquear) sin depender
+// de internal/integrations/mock (que tiene su propia suite de pruebas).
+type asyncStubIntegration struct {
+	meta    core.Metadata
+	execute func(run *jobs.Run) error
+	calls   int32
+}
+
+func (a *asyncStubIntegration) Metadata() core.Metadata { return a.meta }
+
+func (a *asyncStubIntegration) HandleSend(ctx context.Context, req core.SendRequest) (core.SendResult, error) {
+	return core.SendResult{}, core.NewInternalError("no debería invocarse: %q es asíncrona", a.meta.ID)
+}
+
+func (a *asyncStubIntegration) Execute(run *jobs.Run) error {
+	atomic.AddInt32(&a.calls, 1)
+	return a.execute(run)
+}
+
+// asyncNotAsyncIntegration está marcada ASYNC pero no implementa
+// core.AsyncIntegration — simula un error de configuración.
+type asyncNotAsyncIntegration struct {
+	meta core.Metadata
+}
+
+func (a *asyncNotAsyncIntegration) Metadata() core.Metadata { return a.meta }
+
+func (a *asyncNotAsyncIntegration) HandleSend(ctx context.Context, req core.SendRequest) (core.SendResult, error) {
+	return core.SendResult{}, nil
+}
+
 func newClientStore(clients ...auth.Client) *auth.InMemoryClientStore {
 	store := auth.NewInMemoryClientStore()
 	for _, c := range clients {
@@ -73,12 +108,20 @@ func newClientStore(clients ...auth.Client) *auth.InMemoryClientStore {
 
 func newTestRouter(t *testing.T, store auth.ClientStore, integrations ...core.Integration) (http.Handler, *audit.InMemoryStore) {
 	t.Helper()
+	router, auditStore, _ := newTestRouterWithJobs(t, store, integrations...)
+	return router, auditStore
+}
+
+func newTestRouterWithJobs(t *testing.T, store auth.ClientStore, integrations ...core.Integration) (http.Handler, *audit.InMemoryStore, jobs.Store) {
+	t.Helper()
 	reg := core.NewRegistry()
 	for _, i := range integrations {
 		reg.Register(i)
 	}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	auditStore := audit.NewInMemoryStore()
+	jobStore := jobs.NewInMemoryStore()
+	jobManager := jobmanager.NewManager(jobStore, auditStore, 5, logger)
 	router := api.NewRouter(api.Deps{
 		Logger:       logger,
 		Registry:     reg,
@@ -88,8 +131,10 @@ func newTestRouter(t *testing.T, store auth.ClientStore, integrations ...core.In
 		TokenTTL:     testTokenTTL,
 		AuditStore:   auditStore,
 		Idempotency:  idempotency.NewStore(testIdempotencyTTL),
+		JobStore:     jobStore,
+		JobManager:   jobManager,
 	})
-	return router, auditStore
+	return router, auditStore, jobStore
 }
 
 func testToken(t *testing.T, subject string, scopes []string) string {
@@ -118,6 +163,53 @@ func doSend(t *testing.T, router http.Handler, token, integrationID, body string
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 	return rec
+}
+
+func doGet(t *testing.T, router http.Handler, token, path string) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodGet, path, nil)
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	return rec
+}
+
+func doPost(t *testing.T, router http.Handler, token, path, body string) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodPost, path, bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	return rec
+}
+
+// waitForJobTerminal sondea GET /jobs/{job_id} hasta que el job alcance un
+// estado terminal, igual que haría un cliente real (ver
+// docs/05-patron-asincrono.md §5.3) — necesario porque Submit ejecuta el job
+// en una goroutine en background.
+func waitForJobTerminal(t *testing.T, router http.Handler, token, jobID string, timeout time.Duration) map[string]any {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for {
+		rec := doGet(t, router, token, "/api/v1/jobs/"+jobID)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("GET /jobs/%s: status = %d, body = %s", jobID, rec.Code, rec.Body.String())
+		}
+		resp := decodeJSON(t, rec)
+		switch resp["status"] {
+		case "COMPLETED", "FAILED", "PARTIAL":
+			return resp
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("timeout esperando que el job %s termine; último status=%v", jobID, resp["status"])
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
 }
 
 func decodeJSON(t *testing.T, rec *httptest.ResponseRecorder) map[string]any {
@@ -438,18 +530,260 @@ func TestSend_InvalidEnvelope(t *testing.T) {
 	}
 }
 
-func TestSend_AsyncNotYetSupported(t *testing.T) {
-	stub := &stubIntegration{meta: core.Metadata{ID: "stub-async", Mode: core.ModeAsync}}
-	router, _ := newTestRouter(t, newClientStore(), stub)
-	token := testToken(t, "sgp", []string{"integration:stub-async:invoke"})
+func TestSend_Async_MisconfiguredIntegration(t *testing.T) {
+	misconfigured := &asyncNotAsyncIntegration{meta: core.Metadata{ID: "stub-async-bad", Mode: core.ModeAsync}}
+	router, _ := newTestRouter(t, newClientStore(), misconfigured)
+	token := testToken(t, "sgp", []string{"integration:stub-async-bad:invoke"})
 
-	rec := doSend(t, router, token, "stub-async", `{"source_system":"SGP","timestamp":"2026-10-06T14:32:00Z","payload":{}}`)
+	rec := doSend(t, router, token, "stub-async-bad", `{"source_system":"SGP","timestamp":"2026-10-06T14:32:00Z","payload":{}}`)
 
-	if rec.Code != http.StatusServiceUnavailable {
+	if rec.Code != http.StatusInternalServerError {
 		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
 	}
-	if stub.callCount() != 0 {
-		t.Error("HandleSend no debería invocarse para una integración async (Job Manager pendiente, Fase 5)")
+	if resp := decodeJSON(t, rec); resp["code"] != core.CodeInternalError {
+		t.Errorf("code = %v, se esperaba %s", resp["code"], core.CodeInternalError)
+	}
+}
+
+func TestSend_Async_AcceptedAndCompletes(t *testing.T) {
+	asyncInt := &asyncStubIntegration{
+		meta: core.Metadata{
+			ID: "stub-async", Mode: core.ModeAsync, Direction: core.DirectionInbound,
+			ExternalSystem: "MOCK", DeliveryMode: jobs.DeliveryPullAPI,
+		},
+		execute: func(run *jobs.Run) error {
+			total := 2
+			if err := run.ReportProgress(0, 0, &total); err != nil {
+				return err
+			}
+			if err := run.AddItem(jobs.Item{ExternalID: "A-1", Status: "SUCCESS", Data: map[string]any{"n": 1}}); err != nil {
+				return err
+			}
+			if err := run.ReportProgress(1, 0, &total); err != nil {
+				return err
+			}
+			if err := run.AddItem(jobs.Item{ExternalID: "A-2", Status: "SUCCESS", Data: map[string]any{"n": 2}}); err != nil {
+				return err
+			}
+			return run.ReportProgress(2, 0, &total)
+		},
+	}
+	router, auditStore, _ := newTestRouterWithJobs(t, newClientStore(), asyncInt)
+	token := testToken(t, "sgp", []string{"integration:stub-async:invoke"})
+
+	rec := doSend(t, router, token, "stub-async", `{"correlation_id":"corr-async-1","source_system":"SGP","timestamp":"2026-10-06T14:32:00Z","payload":{}}`)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	accepted := decodeJSON(t, rec)
+	jobID, _ := accepted["job_id"].(string)
+	if jobID == "" {
+		t.Fatal("se esperaba un job_id en la respuesta de aceptación")
+	}
+	if accepted["status"] != "ACCEPTED" || accepted["status_url"] != "/api/v1/jobs/"+jobID {
+		t.Errorf("respuesta de aceptación inesperada: %+v", accepted)
+	}
+
+	final := waitForJobTerminal(t, router, token, jobID, 2*time.Second)
+	if final["status"] != "COMPLETED" {
+		t.Fatalf("status final = %v, se esperaba COMPLETED: %+v", final["status"], final)
+	}
+	progress, _ := final["progress"].(map[string]any)
+	if progress["processed"] != float64(2) || progress["failed"] != float64(0) {
+		t.Errorf("progress inesperado: %+v", progress)
+	}
+	if final["result_url"] != "/api/v1/jobs/"+jobID+"/result" {
+		t.Errorf("result_url inesperado para delivery_mode pull_api: %+v", final)
+	}
+
+	resultRec := doGet(t, router, token, "/api/v1/jobs/"+jobID+"/result")
+	if resultRec.Code != http.StatusOK {
+		t.Fatalf("GET result: status = %d, body = %s", resultRec.Code, resultRec.Body.String())
+	}
+	result := decodeJSON(t, resultRec)
+	summary, _ := result["summary"].(map[string]any)
+	if summary["total"] != float64(2) || summary["success"] != float64(2) || summary["failed"] != float64(0) {
+		t.Errorf("summary inesperado: %+v", summary)
+	}
+	items, _ := result["items"].([]any)
+	if len(items) != 2 {
+		t.Errorf("se esperaban 2 ítems, hay %d: %+v", len(items), items)
+	}
+
+	if atomic.LoadInt32(&asyncInt.calls) != 1 {
+		t.Errorf("Execute se llamó %d veces, se esperaba 1", asyncInt.calls)
+	}
+
+	foundAudit := findAuditByCorrelationID(t, auditStore, "corr-async-1")
+	if foundAudit == nil {
+		t.Fatal("se esperaba un registro de auditoría para el job")
+	}
+	if foundAudit.JobID != jobID || foundAudit.Status != audit.StatusSuccess {
+		t.Errorf("registro de auditoría del job inesperado: %+v", foundAudit)
+	}
+
+	ackRec := doPost(t, router, token, "/api/v1/jobs/"+jobID+"/ack", "")
+	if ackRec.Code != http.StatusOK {
+		t.Fatalf("ack: status = %d, body = %s", ackRec.Code, ackRec.Body.String())
+	}
+}
+
+func TestSend_Async_PartialResult(t *testing.T) {
+	asyncInt := &asyncStubIntegration{
+		meta: core.Metadata{ID: "stub-async-partial", Mode: core.ModeAsync, DeliveryMode: jobs.DeliveryPullAPI},
+		execute: func(run *jobs.Run) error {
+			total := 2
+			_ = run.ReportProgress(0, 0, &total)
+			_ = run.AddItem(jobs.Item{ExternalID: "A-1", Status: "SUCCESS", Data: map[string]any{"n": 1}})
+			_ = run.AddItem(jobs.Item{ExternalID: "A-2", Status: "FAILED", ErrorDetail: "fallo simulado"})
+			return run.ReportProgress(2, 1, &total)
+		},
+	}
+	router, _, _ := newTestRouterWithJobs(t, newClientStore(), asyncInt)
+	token := testToken(t, "sgp", []string{"integration:stub-async-partial:invoke"})
+
+	rec := doSend(t, router, token, "stub-async-partial", `{"source_system":"SGP","timestamp":"2026-10-06T14:32:00Z","payload":{}}`)
+	jobID := decodeJSON(t, rec)["job_id"].(string)
+
+	final := waitForJobTerminal(t, router, token, jobID, 2*time.Second)
+	if final["status"] != "PARTIAL" {
+		t.Fatalf("status final = %v, se esperaba PARTIAL", final["status"])
+	}
+
+	result := decodeJSON(t, doGet(t, router, token, "/api/v1/jobs/"+jobID+"/result"))
+	summary, _ := result["summary"].(map[string]any)
+	if summary["success"] != float64(1) || summary["failed"] != float64(1) {
+		t.Errorf("summary inesperado: %+v", summary)
+	}
+}
+
+func TestSend_Async_ExecuteErrorMeansJobFailed(t *testing.T) {
+	asyncInt := &asyncStubIntegration{
+		meta: core.Metadata{ID: "stub-async-fail", Mode: core.ModeAsync, DeliveryMode: jobs.DeliveryPullAPI},
+		execute: func(run *jobs.Run) error {
+			return fmt.Errorf("no se pudo autenticar contra el sistema externo simulado")
+		},
+	}
+	router, auditStore, _ := newTestRouterWithJobs(t, newClientStore(), asyncInt)
+	token := testToken(t, "sgp", []string{"integration:stub-async-fail:invoke"})
+
+	rec := doSend(t, router, token, "stub-async-fail", `{"correlation_id":"corr-async-fail","source_system":"SGP","timestamp":"2026-10-06T14:32:00Z","payload":{}}`)
+	jobID := decodeJSON(t, rec)["job_id"].(string)
+
+	final := waitForJobTerminal(t, router, token, jobID, 2*time.Second)
+	if final["status"] != "FAILED" {
+		t.Fatalf("status final = %v, se esperaba FAILED", final["status"])
+	}
+
+	foundAudit := findAuditByCorrelationID(t, auditStore, "corr-async-fail")
+	if foundAudit == nil || foundAudit.Status != audit.StatusFailed || foundAudit.ErrorDetail == "" {
+		t.Errorf("registro de auditoría del job fallido inesperado: %+v", foundAudit)
+	}
+}
+
+func TestSend_Async_PanicDoesNotLeaveJobRunningForever(t *testing.T) {
+	asyncInt := &asyncStubIntegration{
+		meta: core.Metadata{ID: "stub-async-panic", Mode: core.ModeAsync, DeliveryMode: jobs.DeliveryPullAPI},
+		execute: func(run *jobs.Run) error {
+			panic("panic simulado en Execute")
+		},
+	}
+	router, _, _ := newTestRouterWithJobs(t, newClientStore(), asyncInt)
+	token := testToken(t, "sgp", []string{"integration:stub-async-panic:invoke"})
+
+	rec := doSend(t, router, token, "stub-async-panic", `{"source_system":"SGP","timestamp":"2026-10-06T14:32:00Z","payload":{}}`)
+	jobID := decodeJSON(t, rec)["job_id"].(string)
+
+	final := waitForJobTerminal(t, router, token, jobID, 2*time.Second)
+	if final["status"] != "FAILED" {
+		t.Fatalf("status final = %v, se esperaba FAILED (panic recuperado)", final["status"])
+	}
+}
+
+func TestJobResult_NotFinishedYet(t *testing.T) {
+	started := make(chan struct{})
+	release := make(chan struct{})
+	asyncInt := &asyncStubIntegration{
+		meta: core.Metadata{ID: "stub-async-slow", Mode: core.ModeAsync, DeliveryMode: jobs.DeliveryPullAPI},
+		execute: func(run *jobs.Run) error {
+			close(started)
+			<-release
+			return nil
+		},
+	}
+	router, _, _ := newTestRouterWithJobs(t, newClientStore(), asyncInt)
+	token := testToken(t, "sgp", []string{"integration:stub-async-slow:invoke"})
+
+	rec := doSend(t, router, token, "stub-async-slow", `{"source_system":"SGP","timestamp":"2026-10-06T14:32:00Z","payload":{}}`)
+	jobID := decodeJSON(t, rec)["job_id"].(string)
+
+	<-started
+	resultRec := doGet(t, router, token, "/api/v1/jobs/"+jobID+"/result")
+	if resultRec.Code != http.StatusConflict {
+		t.Fatalf("status = %d, body = %s", resultRec.Code, resultRec.Body.String())
+	}
+	if resp := decodeJSON(t, resultRec); resp["code"] != core.CodeJobNotFinished {
+		t.Errorf("code = %v, se esperaba %s", resp["code"], core.CodeJobNotFinished)
+	}
+
+	close(release)
+	waitForJobTerminal(t, router, token, jobID, 2*time.Second)
+}
+
+func TestJobStatus_NotFound(t *testing.T) {
+	router, _ := newTestRouter(t, newClientStore())
+	token := testToken(t, "sgp", nil)
+
+	rec := doGet(t, router, token, "/api/v1/jobs/no-existe")
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	if resp := decodeJSON(t, rec); resp["code"] != core.CodeJobNotFound {
+		t.Errorf("code = %v, se esperaba %s", resp["code"], core.CodeJobNotFound)
+	}
+}
+
+func TestJobAck_NotFound(t *testing.T) {
+	router, _ := newTestRouter(t, newClientStore())
+	token := testToken(t, "sgp", nil)
+
+	rec := doPost(t, router, token, "/api/v1/jobs/no-existe/ack", "")
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestSend_Async_PushDBDeliveryMode(t *testing.T) {
+	var sawDeliveryMode jobs.DeliveryMode
+	asyncInt := &asyncStubIntegration{
+		meta: core.Metadata{ID: "stub-async-push", Mode: core.ModeAsync, DeliveryMode: jobs.DeliveryPushDB},
+		execute: func(run *jobs.Run) error {
+			sawDeliveryMode = run.DeliveryMode
+			return nil
+		},
+	}
+	router, _, jobStore := newTestRouterWithJobs(t, newClientStore(), asyncInt)
+	token := testToken(t, "sgp", []string{"integration:stub-async-push:invoke"})
+
+	rec := doSend(t, router, token, "stub-async-push", `{"source_system":"SGP","timestamp":"2026-10-06T14:32:00Z","payload":{}}`)
+	jobID := decodeJSON(t, rec)["job_id"].(string)
+
+	final := waitForJobTerminal(t, router, token, jobID, 2*time.Second)
+	if sawDeliveryMode != jobs.DeliveryPushDB {
+		t.Errorf("DeliveryMode visto por Execute = %v, se esperaba %v", sawDeliveryMode, jobs.DeliveryPushDB)
+	}
+	// Con delivery_mode push_db no se expone result_url: el resultado ya se
+	// entregó directamente al destino simulado, no vía pull_api.
+	if final["result_url"] != nil && final["result_url"] != "" {
+		t.Errorf("no se esperaba result_url con delivery_mode push_db: %+v", final)
+	}
+
+	job, found, err := jobStore.Get(context.Background(), jobID)
+	if err != nil || !found {
+		t.Fatalf("se esperaba encontrar el job en el store: found=%v err=%v", found, err)
+	}
+	if job.DeliveryMode != jobs.DeliveryPushDB {
+		t.Errorf("DeliveryMode persistido = %v, se esperaba %v", job.DeliveryMode, jobs.DeliveryPushDB)
 	}
 }
 

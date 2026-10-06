@@ -33,6 +33,10 @@ type Config struct {
 	// IdempotencyTTL es la ventana de deduplicación por correlation_id — ver
 	// docs/03-contrato-api-rest.md §3.9.
 	IdempotencyTTL time.Duration
+
+	// JobConcurrency limita cuántos jobs asíncronos se ejecutan en paralelo
+	// — ver docs/05-patron-asincrono.md §5.8 y internal/core/jobmanager.
+	JobConcurrency int
 }
 
 func Load() (*Config, error) {
@@ -58,6 +62,11 @@ func Load() (*Config, error) {
 		return nil, err
 	}
 
+	jobConcurrency, err := getEnvInt("NEXUS_JOB_CONCURRENCY", 5)
+	if err != nil {
+		return nil, err
+	}
+
 	return &Config{
 		Env:            env,
 		HTTPAddr:       getEnv("NEXUS_HTTP_ADDR", ":8080"),
@@ -67,6 +76,7 @@ func Load() (*Config, error) {
 		TokenTTL:       time.Duration(tokenTTLSeconds) * time.Second,
 		SGPAPIKey:      sgpAPIKey,
 		IdempotencyTTL: time.Duration(idempotencyTTLHours) * time.Hour,
+		JobConcurrency: jobConcurrency,
 	}, nil
 }
 

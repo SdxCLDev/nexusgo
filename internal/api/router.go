@@ -12,6 +12,8 @@ import (
 	"nexusgo/internal/auth"
 	"nexusgo/internal/core"
 	"nexusgo/internal/core/idempotency"
+	"nexusgo/internal/core/jobmanager"
+	"nexusgo/internal/jobs"
 )
 
 // Deps son las dependencias del router. Se agrupan en un struct porque la
@@ -26,6 +28,8 @@ type Deps struct {
 	TokenTTL     time.Duration
 	AuditStore   audit.Store
 	Idempotency  *idempotency.Store
+	JobStore     jobs.Store
+	JobManager   *jobmanager.Manager
 	ReadyChecks  []handlers.ReadyCheck
 }
 
@@ -41,11 +45,17 @@ func NewRouter(deps Deps) http.Handler {
 	// Emisión de token: sin autenticación previa (es el punto de entrada).
 	mux.HandleFunc("POST /api/v1/auth/token", handlers.IssueToken(deps.ClientStore, deps.JWTSecret, deps.TokenTTL, deps.Logger))
 
-	// Endpoints funcionales: protegidos con autenticación JWT.
+	// Endpoints funcionales: protegidos con autenticación JWT. Los
+	// endpoints de jobs no exigen un scope adicional (ver nota de
+	// simplificación en docs/10-plan-de-trabajo-poc.md Fase 5): basta con
+	// estar autenticado, igual que el catálogo.
 	authn := middleware.Authenticate(deps.JWTSecret, deps.Logger)
 	mux.Handle("POST /api/v1/integrations/{integration_id}/send",
-		authn(handlers.Send(deps.Registry, deps.AuditStore, deps.Idempotency, deps.Logger)))
+		authn(handlers.Send(deps.Registry, deps.JobManager, deps.AuditStore, deps.Idempotency, deps.Logger)))
 	mux.Handle("GET /api/v1/integrations", authn(handlers.Catalog(deps.CatalogStore, deps.Logger)))
+	mux.Handle("GET /api/v1/jobs/{job_id}", authn(handlers.JobStatus(deps.JobStore, deps.Logger)))
+	mux.Handle("GET /api/v1/jobs/{job_id}/result", authn(handlers.JobResult(deps.JobStore, deps.Logger)))
+	mux.Handle("POST /api/v1/jobs/{job_id}/ack", authn(handlers.JobAck(deps.JobStore, deps.Logger)))
 
 	var h http.Handler = mux
 	h = middleware.Logging(deps.Logger)(h)

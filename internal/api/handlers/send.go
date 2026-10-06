@@ -14,14 +14,19 @@ import (
 	"nexusgo/internal/auth"
 	"nexusgo/internal/core"
 	"nexusgo/internal/core/idempotency"
+	"nexusgo/internal/core/jobmanager"
 )
 
 // Send implementa POST /api/v1/integrations/{integration_id}/send — ver
-// docs/03-contrato-api-rest.md §3.4-3.5, docs/02-arquitectura.md §2.8 y la
+// docs/03-contrato-api-rest.md §3.4-3.6, docs/02-arquitectura.md §2.8 y la
 // idempotencia por correlation_id de docs/03-contrato-api-rest.md §3.9.
 // Se registra detrás del middleware auth.Authenticate (ver router.go), que
 // deja los claims del token en el contexto de la solicitud.
-func Send(reg *core.Registry, auditStore audit.Store, idem *idempotency.Store, logger *slog.Logger) http.HandlerFunc {
+//
+// Nota: la idempotencia por correlation_id (ver internal/core/idempotency)
+// solo aplica al camino síncrono. Las integraciones asíncronas no la usan
+// todavía — ver el pendiente anotado en docs/10-plan-de-trabajo-poc.md Fase 5.
+func Send(reg *core.Registry, jobManager *jobmanager.Manager, auditStore audit.Store, idem *idempotency.Store, logger *slog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		integrationID := r.PathValue("integration_id")
 
@@ -63,10 +68,30 @@ func Send(reg *core.Registry, auditStore audit.Store, idem *idempotency.Store, l
 
 		meta := integration.Metadata()
 		if meta.Mode == core.ModeAsync {
-			// El Job Manager se incorpora en la Fase 5 — por ahora las
-			// integraciones asíncronas no pueden invocarse.
-			apierr.Write(w, logger, env.CorrelationID, integrationID,
-				core.NewUnavailableError("la integración %q es asíncrona; el soporte asíncrono aún no está implementado", integrationID))
+			asyncIntegration, ok := integration.(core.AsyncIntegration)
+			if !ok {
+				// Error de configuración: una integración registrada como
+				// ASYNC debe implementar core.AsyncIntegration.
+				apierr.Write(w, logger, env.CorrelationID, integrationID,
+					core.NewInternalError("la integración %q está marcada ASYNC pero no implementa AsyncIntegration", integrationID))
+				return
+			}
+
+			jobID, err := jobManager.Submit(r.Context(), asyncIntegration, env.CorrelationID, claims.Subject, env.Payload)
+			if err != nil {
+				apierr.Write(w, logger, env.CorrelationID, integrationID,
+					core.NewInternalError("no se pudo encolar el job: %w", err))
+				return
+			}
+
+			httpx.WriteJSON(w, http.StatusAccepted, dto.AsyncAcceptedResponse{
+				CorrelationID: env.CorrelationID,
+				IntegrationID: integrationID,
+				JobID:         jobID,
+				Status:        "ACCEPTED",
+				StatusURL:     "/api/v1/jobs/" + jobID,
+				Timestamp:     time.Now().UTC().Format(time.RFC3339),
+			})
 			return
 		}
 

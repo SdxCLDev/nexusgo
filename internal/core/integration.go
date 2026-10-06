@@ -3,6 +3,8 @@ package core
 import (
 	"context"
 	"encoding/json"
+
+	"nexusgo/internal/jobs"
 )
 
 type SendRequest struct {
@@ -23,5 +25,11 @@ type Integration interface {
 	HandleSend(ctx context.Context, req SendRequest) (SendResult, error)
 }
 
-// AsyncIntegration y el ciclo de vida de Job se incorporan en la Fase 5
-// (Job Manager) — ver docs/10-plan-de-trabajo-poc.md.
+// AsyncIntegration es implementada por integraciones de modo ASYNC. El
+// orquestador (internal/core/jobmanager) la invoca en background; Execute
+// reporta progreso e ítems a través de run, sin bloquear el request HTTP
+// original — ver docs/05-patron-asincrono.md.
+type AsyncIntegration interface {
+	Integration
+	Execute(run *jobs.Run) error
+}
