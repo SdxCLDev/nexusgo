@@ -1,7 +1,7 @@
 # Binarios
 /bin/
-nexus
-nexus.exe
+/nexus
+/nexus.exe
 
 # Base de datos local (PoC con SQLite)
 *.db
