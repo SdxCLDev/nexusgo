@@ -13,6 +13,7 @@ const (
 	CodeUnauthorized           = "UNAUTHORIZED"
 	CodeForbidden              = "FORBIDDEN"
 	CodeIntegrationNotFound    = "INTEGRATION_NOT_FOUND"
+	CodeDuplicateRequest       = "DUPLICATE_REQUEST"
 	CodeExternalSystemError    = "EXTERNAL_SYSTEM_ERROR"
 	CodeBusinessRuleRejected   = "BUSINESS_RULE_REJECTED"
 	CodeIntegrationUnavailable = "INTEGRATION_UNAVAILABLE"
@@ -65,6 +66,10 @@ func NewForbiddenError(format string, args ...any) *Error {
 
 func NewNotFoundError(format string, args ...any) *Error {
 	return newError(CodeIntegrationNotFound, http.StatusNotFound, format, args...)
+}
+
+func NewDuplicateError(format string, args ...any) *Error {
+	return newError(CodeDuplicateRequest, http.StatusConflict, format, args...)
 }
 
 func NewExternalError(format string, args ...any) *Error {

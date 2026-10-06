@@ -19,11 +19,13 @@ const (
 )
 
 // Metadata describe una integración registrada: la información que se
-// expone en el catálogo público (GET /integrations).
+// expone en el catálogo público (GET /integrations) más datos de uso
+// interno (ExternalSystem) usados por auditoría — ver docs/08-modelo-datos.md §8.2.
 type Metadata struct {
-	ID        string
-	Name      string
-	Direction Direction
-	Mode      Mode
-	Version   string
+	ID             string
+	Name           string
+	Direction      Direction
+	Mode           Mode
+	Version        string
+	ExternalSystem string
 }

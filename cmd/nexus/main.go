@@ -11,9 +11,11 @@ import (
 	"time"
 
 	"nexusgo/internal/api"
+	"nexusgo/internal/audit"
 	"nexusgo/internal/auth"
 	"nexusgo/internal/config"
 	"nexusgo/internal/core"
+	"nexusgo/internal/core/idempotency"
 	"nexusgo/internal/integrations/mock"
 	"nexusgo/internal/logging"
 )
@@ -27,9 +29,15 @@ func main() {
 
 	logger := logging.New(cfg)
 
-	reg := buildRegistry()
-	clientStore := buildClientStore(cfg)
-	router := api.NewRouter(logger, reg, clientStore, []byte(cfg.JWTSecret), cfg.TokenTTL)
+	router := api.NewRouter(api.Deps{
+		Logger:      logger,
+		Registry:    buildRegistry(),
+		ClientStore: buildClientStore(cfg),
+		JWTSecret:   []byte(cfg.JWTSecret),
+		TokenTTL:    cfg.TokenTTL,
+		AuditStore:  audit.NewInMemoryStore(),
+		Idempotency: idempotency.NewStore(cfg.IdempotencyTTL),
+	})
 
 	srv := &http.Server{
 		Addr:    cfg.HTTPAddr,

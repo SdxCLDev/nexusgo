@@ -29,6 +29,10 @@ type Config struct {
 	// la PoC (ver docs/10-plan-de-trabajo-poc.md Fase 2). Se reemplaza por
 	// un alta administrativa persistida en la Fase 4.
 	SGPAPIKey string
+
+	// IdempotencyTTL es la ventana de deduplicación por correlation_id — ver
+	// docs/03-contrato-api-rest.md §3.9.
+	IdempotencyTTL time.Duration
 }
 
 func Load() (*Config, error) {
@@ -49,14 +53,20 @@ func Load() (*Config, error) {
 		return nil, err
 	}
 
+	idempotencyTTLHours, err := getEnvInt("NEXUS_IDEMPOTENCY_TTL_HOURS", 24)
+	if err != nil {
+		return nil, err
+	}
+
 	return &Config{
-		Env:       env,
-		HTTPAddr:  getEnv("NEXUS_HTTP_ADDR", ":8080"),
-		LogLevel:  getEnv("NEXUS_LOG_LEVEL", "info"),
-		DBPath:    getEnv("NEXUS_DB_PATH", "nexus.db"),
-		JWTSecret: jwtSecret,
-		TokenTTL:  time.Duration(tokenTTLSeconds) * time.Second,
-		SGPAPIKey: sgpAPIKey,
+		Env:            env,
+		HTTPAddr:       getEnv("NEXUS_HTTP_ADDR", ":8080"),
+		LogLevel:       getEnv("NEXUS_LOG_LEVEL", "info"),
+		DBPath:         getEnv("NEXUS_DB_PATH", "nexus.db"),
+		JWTSecret:      jwtSecret,
+		TokenTTL:       time.Duration(tokenTTLSeconds) * time.Second,
+		SGPAPIKey:      sgpAPIKey,
+		IdempotencyTTL: time.Duration(idempotencyTTLHours) * time.Hour,
 	}, nil
 }
 

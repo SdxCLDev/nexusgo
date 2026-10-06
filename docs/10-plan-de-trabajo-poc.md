@@ -91,12 +91,14 @@ Fase 11 Pruebas de integración end-to-end y cierre de PoC
 
 **Objetivo**: validar el flujo completo descrito en [Patrón de Integración Síncrona](04-patron-sincrono.md) sin depender de AMD/SAP reales.
 
-- [ ] Crear `internal/integrations/mock` con una integración `mock-echo` (`SYNC`, `OUTBOUND`) que simplemente transforma y devuelve el `payload` recibido, simulando latencia configurable y permitiendo forzar distintos resultados (éxito, error de negocio, timeout) vía parámetros del propio payload — para probar todos los caminos de error de [Contrato API REST §3.8](03-contrato-api-rest.md#38-códigos-de-error) sin un sistema externo real.
-- [ ] Implementar `internal/audit`: registro de auditoría en memoria por ahora (se persiste en Fase 4), con los campos de [Modelo de Datos §8.4](08-modelo-datos.md#84-tabla-audit_log).
-- [ ] Conectar el núcleo para que cada invocación genere su entrada de auditoría (`INICIADO` → `EXITOSO`/`FALLIDO`) y su log técnico con `correlation_id`.
-- [ ] Implementar idempotencia básica por `correlation_id` (ver [Contrato API REST §3.9](03-contrato-api-rest.md#39-idempotencia)) en memoria.
+- [x] Ampliar `internal/integrations/mock` (`mock-echo`, `SYNC`/`OUTBOUND`) para simular latencia configurable (`payload.delay_ms`, cancelable por contexto) y forzar resultados (`payload.force`: `success`, `business_error`, `external_error`, `panic`) — cubre los caminos 200/422/502/500 de [Contrato API REST §3.8](03-contrato-api-rest.md#38-códigos-de-error) sin un sistema externo real.
+- [x] Implementar `internal/audit`: registro de auditoría en memoria (`InMemoryStore`), con los campos de [Modelo de Datos §8.4](08-modelo-datos.md#84-tabla-audit_log); `Finish` rechaza modificar un registro que ya tiene estado final, aplicando la inmutabilidad de [§7.2.4](07-logging-auditoria.md#724-inmutabilidad).
+- [x] Conectar el handler `Send` para que cada invocación genere su entrada de auditoría (`INICIADO` → `EXITOSO`/`FALLIDO`/`PARCIAL`) correlacionada por `correlation_id`.
+- [x] Implementar idempotencia por `correlation_id` (`internal/core/idempotency`, ver [Contrato API REST §3.9](03-contrato-api-rest.md#39-idempotencia)): una solicitud en curso responde `409 DUPLICATE_REQUEST`; una ya completada con éxito devuelve el resultado cacheado sin reejecutar; una que terminó en error libera la clave para permitir reintento (alineado con el reintento documentado en [Patrón Síncrono §4.6](04-patron-sincrono.md#46-reintentos)).
 
-**Criterio de aceptación**: invocar `mock-echo` genera respuesta correcta, entrada de auditoría y logs correlacionados por `correlation_id`; reenviar el mismo `correlation_id` no duplica la ejecución.
+> **Hallazgo corregido durante la implementación**: al probar manualmente el caso `force:"panic"` se detectó que un panic dentro de `HandleSend` escapaba hasta el middleware `Recover` (Fase 0), que no conoce `correlation_id`/`integration_id` ni libera la clave de idempotencia ni cierra el registro de auditoría — dejándolo `INICIADO` para siempre y bloqueando cualquier reintento con ese `correlation_id`. Se corrigió envolviendo la llamada a `HandleSend` en `callIntegration` (`internal/api/handlers/send.go`), que recupera el panic localmente y lo convierte en `core.NewInternalError`, permitiendo que siga el mismo camino de limpieza (idempotencia + auditoría + respuesta estándar) que cualquier otro error. Cubierto por `TestSend_PanicIsRecoveredAndDoesNotBlockRetry`.
+
+**Criterio de aceptación**: invocar `mock-echo` genera respuesta correcta, entrada de auditoría y logs correlacionados por `correlation_id`; reenviar el mismo `correlation_id` no duplica la ejecución. ✅ Verificado con pruebas automatizadas (18 casos) y manualmente con `curl`, incluyendo el caso límite del panic.
 
 ---
 
