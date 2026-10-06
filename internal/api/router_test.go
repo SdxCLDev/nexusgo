@@ -876,6 +876,30 @@ func TestAuthToken_InvalidCredentials(t *testing.T) {
 	}
 }
 
+func TestOpenAPIAndDocs(t *testing.T) {
+	router, _ := newTestRouter(t, newClientStore())
+
+	specRec := doGet(t, router, "", "/openapi.json")
+	if specRec.Code != http.StatusOK {
+		t.Fatalf("GET /openapi.json: status = %d", specRec.Code)
+	}
+	var spec map[string]any
+	if err := json.Unmarshal(specRec.Body.Bytes(), &spec); err != nil {
+		t.Fatalf("/openapi.json no es JSON válido: %v", err)
+	}
+	if spec["openapi"] == nil || spec["paths"] == nil {
+		t.Errorf("spec OpenAPI con forma inesperada: %+v", spec)
+	}
+
+	docsRec := doGet(t, router, "", "/docs")
+	if docsRec.Code != http.StatusOK {
+		t.Fatalf("GET /docs: status = %d", docsRec.Code)
+	}
+	if ct := docsRec.Header().Get("Content-Type"); ct != "text/html; charset=utf-8" {
+		t.Errorf("Content-Type de /docs = %q", ct)
+	}
+}
+
 func TestHealthAndReady(t *testing.T) {
 	router, _ := newTestRouter(t, newClientStore())
 

@@ -42,6 +42,12 @@ func NewRouter(deps Deps) http.Handler {
 	mux.HandleFunc("GET /health", handlers.Health)
 	mux.HandleFunc("GET /ready", handlers.Ready(deps.ReadyChecks...))
 
+	// Documentación interactiva (Swagger UI) — sin autenticación: describe el
+	// contrato, no expone datos. Útil para explorar/probar la API desde un
+	// navegador sin acceso al código fuente (ver docs/10-plan-de-trabajo-poc.md).
+	mux.HandleFunc("GET /openapi.json", handlers.OpenAPISpec)
+	mux.HandleFunc("GET /docs", handlers.SwaggerUI)
+
 	// Emisión de token: sin autenticación previa (es el punto de entrada).
 	mux.HandleFunc("POST /api/v1/auth/token", handlers.IssueToken(deps.ClientStore, deps.JWTSecret, deps.TokenTTL, deps.Logger))
 

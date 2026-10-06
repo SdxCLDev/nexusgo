@@ -2,6 +2,9 @@
 /bin/
 /nexus
 /nexus.exe
+deploy/nexus.exe
+deploy/nexus.log
+*.log
 
 # Base de datos local (PoC con SQLite)
 *.db

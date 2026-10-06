@@ -31,6 +31,8 @@ Cambios incompatibles del contrato (breaking changes) incrementan la versión (`
 | `POST` | `/auth/token` | Emite un JWT de corta duración a partir de una API Key (ver [Autenticación](06-autenticacion-seguridad.md)). |
 | `GET` | `/health` | Liveness check. |
 | `GET` | `/ready` | Readiness check (verifica conexión a BD, etc.). |
+| `GET` | `/docs` | Documentación interactiva de la API (Swagger UI), sin autenticación. |
+| `GET` | `/openapi.json` | Spec OpenAPI 3.0 crudo que consume `/docs`. |
 
 ## 3.4 Envelope de solicitud (`send`)
 

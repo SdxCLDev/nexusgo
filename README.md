@@ -14,6 +14,8 @@ go run ./cmd/nexus
 
 Al arrancar, Nexus crea (si no existe) el archivo SQLite indicado por `NEXUS_DB_PATH` y aplica las migraciones pendientes automáticamente — no requiere un paso manual aparte.
 
+Documentación interactiva de la API (Swagger UI), sin autenticación: **http://localhost:8080/docs** (el spec crudo está en `/openapi.json`). Para probar operaciones protegidas desde ahí, primero generá un token con `/api/v1/auth/token` y pegalo con el botón **Authorize**.
+
 Variables de entorno (todas opcionales en ambiente `dev`; `NEXUS_JWT_SECRET` y `NEXUS_SGP_API_KEY` son obligatorias en cualquier otro ambiente):
 
 | Variable | Default (solo `dev`) | Descripción |
@@ -69,3 +71,62 @@ go build ./...     # compila todo
 go vet ./...        # análisis estático
 go test ./...        # pruebas
 ```
+
+## Despliegue en un Windows Server
+
+Por ahora, deliberadamente simple: un ejecutable que se levanta directamente, sin registrarlo como servicio de Windows (eso se evaluará más adelante — ver `docs/10-plan-de-trabajo-poc.md`).
+
+### 1. Compilar el ejecutable
+
+Como Nexus ya se compila en una máquina Windows, alcanza con:
+
+```bash
+go build -o nexus.exe ./cmd/nexus
+```
+
+Si compilás desde Linux/Mac para un server Windows, hacé cross-compilation:
+
+```bash
+GOOS=windows GOARCH=amd64 go build -o nexus.exe ./cmd/nexus
+```
+
+El binario resultante es autocontenido (incluye el driver de SQLite y las migraciones embebidas) — no necesita instalar nada más en el server.
+
+### 2. Copiar al server
+
+Copiá al server, en una misma carpeta (ej. `C:\Nexus\`):
+
+- `nexus.exe`
+- `deploy\run.ps1`
+- `deploy\set-env.ps1`
+
+### 3. Configurar las variables de entorno (una sola vez)
+
+Fuera del ambiente `dev`, `NEXUS_JWT_SECRET` y `NEXUS_SGP_API_KEY` son obligatorias (Nexus no arranca sin ellas — ver `internal/config/config.go`). Como Administrador, en el server:
+
+```powershell
+cd C:\Nexus
+notepad set-env.ps1   # reemplazar los valores de ejemplo por los reales
+.\set-env.ps1
+```
+
+`setx /M` deja las variables a nivel de máquina, pero solo las ve una sesión **nueva** — cerrá y volvé a abrir la sesión (o reiniciá) antes del siguiente paso.
+
+### 4. Levantar Nexus
+
+```powershell
+cd C:\Nexus
+.\run.ps1
+```
+
+Esto corre en primer plano y además escribe el log en `nexus.log`, junto al ejecutable. Para dejarlo corriendo sin mantener la sesión de PowerShell abierta, usá `Start-Process` en una ventana aparte o una Tarea Programada ("Ejecutar tanto si el usuario inició sesión como si no") que llame a `run.ps1` al iniciar el sistema.
+
+### 5. Verificar
+
+```powershell
+Invoke-RestMethod http://localhost:8080/health
+```
+
+Y desde un navegador en el server (o donde tenga acceso a `http://<server>:8080`), abrí **`/docs`** para ver la documentación interactiva de la API y probar los endpoints.
+
+> Si el server está detrás de un firewall, recordá habilitar el puerto configurado en `NEXUS_HTTP_ADDR` (por defecto `8080`) para quien necesite acceder a la API o a `/docs`.
