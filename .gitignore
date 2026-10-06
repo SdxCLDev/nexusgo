@@ -16,6 +16,7 @@ deploy/nexus.log
 .env
 *.local.yaml
 *.local.yml
+deploy/env.local.ps1
 
 # Go
 *.test

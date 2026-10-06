@@ -98,19 +98,19 @@ Copiá al server, en una misma carpeta (ej. `C:\Nexus\`):
 
 - `nexus.exe`
 - `deploy\run.ps1`
-- `deploy\set-env.ps1`
+- `deploy\env.local.ps1.example`
 
 ### 3. Configurar las variables de entorno (una sola vez)
 
-Fuera del ambiente `dev`, `NEXUS_JWT_SECRET` y `NEXUS_SGP_API_KEY` son obligatorias (Nexus no arranca sin ellas — ver `internal/config/config.go`). Como Administrador, en el server:
+Fuera del ambiente `dev`, `NEXUS_JWT_SECRET` y `NEXUS_SGP_API_KEY` son obligatorias (Nexus no arranca sin ellas — ver `internal/config/config.go`). No requiere permisos de Administrador ni tocar el registro de Windows: solo copiar y completar un archivo.
 
 ```powershell
 cd C:\Nexus
-notepad set-env.ps1   # reemplazar los valores de ejemplo por los reales
-.\set-env.ps1
+copy env.local.ps1.example env.local.ps1
+notepad env.local.ps1   # reemplazar los valores de ejemplo por los reales
 ```
 
-`setx /M` deja las variables a nivel de máquina, pero solo las ve una sesión **nueva** — cerrá y volvé a abrir la sesión (o reiniciá) antes del siguiente paso.
+`run.ps1` carga `env.local.ps1` automáticamente si existe (fija las variables solo para el proceso de `nexus.exe` que lanza, nada persistente a nivel de sistema) — no hace falta cerrar la sesión ni reiniciar.
 
 ### 4. Levantar Nexus
 
