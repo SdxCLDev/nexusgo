@@ -69,6 +69,7 @@ func main() {
 		Idempotency:  idempotency.NewStore(cfg.IdempotencyTTL),
 		JobStore:     jobStore,
 		JobManager:   jobManager,
+		BasePath:     cfg.PublicBasePath,
 		ReadyChecks: []handlers.ReadyCheck{
 			func() error {
 				pingCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)

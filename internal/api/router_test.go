@@ -137,6 +137,35 @@ func newTestRouterWithJobs(t *testing.T, store auth.ClientStore, integrations ..
 	return router, auditStore, jobStore
 }
 
+// newTestRouterWithBasePath es como newTestRouterWithJobs, pero con un
+// BasePath configurado — para probar que status_url/result_url y el spec
+// OpenAPI reflejan el prefijo de un reverse proxy (ver
+// docs/10-plan-de-trabajo-poc.md, despliegue detrás de nginx en un sub-path).
+func newTestRouterWithBasePath(t *testing.T, basePath string, integrations ...core.Integration) http.Handler {
+	t.Helper()
+	reg := core.NewRegistry()
+	for _, i := range integrations {
+		reg.Register(i)
+	}
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	auditStore := audit.NewInMemoryStore()
+	jobStore := jobs.NewInMemoryStore()
+	jobManager := jobmanager.NewManager(jobStore, auditStore, 5, logger)
+	return api.NewRouter(api.Deps{
+		Logger:       logger,
+		Registry:     reg,
+		CatalogStore: reg,
+		ClientStore:  newClientStore(),
+		JWTSecret:    testJWTSecret,
+		TokenTTL:     testTokenTTL,
+		AuditStore:   auditStore,
+		Idempotency:  idempotency.NewStore(testIdempotencyTTL),
+		JobStore:     jobStore,
+		JobManager:   jobManager,
+		BasePath:     basePath,
+	})
+}
+
 func testToken(t *testing.T, subject string, scopes []string) string {
 	t.Helper()
 	now := time.Now()
@@ -897,6 +926,60 @@ func TestOpenAPIAndDocs(t *testing.T) {
 	}
 	if ct := docsRec.Header().Get("Content-Type"); ct != "text/html; charset=utf-8" {
 		t.Errorf("Content-Type de /docs = %q", ct)
+	}
+}
+
+func TestBasePath_ReflectedInUrls(t *testing.T) {
+	asyncInt := &asyncStubIntegration{
+		meta: core.Metadata{ID: "stub-async", Mode: core.ModeAsync, DeliveryMode: jobs.DeliveryPullAPI},
+		execute: func(run *jobs.Run) error {
+			return nil
+		},
+	}
+	router := newTestRouterWithBasePath(t, "/nexus", asyncInt)
+	token := testToken(t, "sgp", []string{"integration:stub-async:invoke"})
+
+	rec := doSend(t, router, token, "stub-async", `{"source_system":"SGP","timestamp":"2026-10-06T14:32:00Z","payload":{}}`)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	accepted := decodeJSON(t, rec)
+	jobID, _ := accepted["job_id"].(string)
+	wantStatusURL := "/nexus/api/v1/jobs/" + jobID
+	if accepted["status_url"] != wantStatusURL {
+		t.Errorf("status_url = %v, se esperaba %v", accepted["status_url"], wantStatusURL)
+	}
+
+	final := waitForJobTerminal(t, router, token, jobID, 2*time.Second)
+	wantResultURL := "/nexus/api/v1/jobs/" + jobID + "/result"
+	if final["result_url"] != wantResultURL {
+		t.Errorf("result_url = %v, se esperaba %v", final["result_url"], wantResultURL)
+	}
+
+	spec := decodeJSON(t, doGet(t, router, "", "/openapi.json"))
+	servers, _ := spec["servers"].([]any)
+	if len(servers) != 1 {
+		t.Fatalf("servers inesperado: %+v", spec["servers"])
+	}
+	server0, _ := servers[0].(map[string]any)
+	if server0["url"] != "/nexus" {
+		t.Errorf("servers[0].url = %v, se esperaba /nexus", server0["url"])
+	}
+
+	docsRec := doGet(t, router, "", "/docs")
+	if !bytes.Contains(docsRec.Body.Bytes(), []byte(`/nexus/openapi.json`)) {
+		t.Errorf("la página /docs no referencia /nexus/openapi.json: %s", docsRec.Body.String())
+	}
+}
+
+func TestBasePath_EmptyMeansRootURLs(t *testing.T) {
+	router := newTestRouterWithBasePath(t, "")
+
+	spec := decodeJSON(t, doGet(t, router, "", "/openapi.json"))
+	servers, _ := spec["servers"].([]any)
+	server0, _ := servers[0].(map[string]any)
+	if server0["url"] != "/" {
+		t.Errorf("servers[0].url = %v, se esperaba \"/\" sin basePath", server0["url"])
 	}
 }
 

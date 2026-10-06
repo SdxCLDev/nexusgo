@@ -26,7 +26,7 @@ import (
 // Nota: la idempotencia por correlation_id (ver internal/core/idempotency)
 // solo aplica al camino síncrono. Las integraciones asíncronas no la usan
 // todavía — ver el pendiente anotado en docs/10-plan-de-trabajo-poc.md Fase 5.
-func Send(reg *core.Registry, jobManager *jobmanager.Manager, auditStore audit.Store, idem *idempotency.Store, logger *slog.Logger) http.HandlerFunc {
+func Send(reg *core.Registry, jobManager *jobmanager.Manager, auditStore audit.Store, idem *idempotency.Store, basePath string, logger *slog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		integrationID := r.PathValue("integration_id")
 
@@ -89,7 +89,7 @@ func Send(reg *core.Registry, jobManager *jobmanager.Manager, auditStore audit.S
 				IntegrationID: integrationID,
 				JobID:         jobID,
 				Status:        "ACCEPTED",
-				StatusURL:     "/api/v1/jobs/" + jobID,
+				StatusURL:     basePath + "/api/v1/jobs/" + jobID,
 				Timestamp:     time.Now().UTC().Format(time.RFC3339),
 			})
 			return

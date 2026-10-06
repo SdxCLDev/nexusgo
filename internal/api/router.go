@@ -31,6 +31,11 @@ type Deps struct {
 	JobStore     jobs.Store
 	JobManager   *jobmanager.Manager
 	ReadyChecks  []handlers.ReadyCheck
+
+	// BasePath es el prefijo bajo el que un reverse proxy expone a Nexus
+	// (ej. "/nexus"). Vacío si no hay proxy o si está publicado en la raíz
+	// — ver internal/config.Config.PublicBasePath.
+	BasePath string
 }
 
 func NewRouter(deps Deps) http.Handler {
@@ -45,8 +50,8 @@ func NewRouter(deps Deps) http.Handler {
 	// Documentación interactiva (Swagger UI) — sin autenticación: describe el
 	// contrato, no expone datos. Útil para explorar/probar la API desde un
 	// navegador sin acceso al código fuente (ver docs/10-plan-de-trabajo-poc.md).
-	mux.HandleFunc("GET /openapi.json", handlers.OpenAPISpec)
-	mux.HandleFunc("GET /docs", handlers.SwaggerUI)
+	mux.HandleFunc("GET /openapi.json", handlers.OpenAPISpec(deps.BasePath))
+	mux.HandleFunc("GET /docs", handlers.SwaggerUI(deps.BasePath))
 
 	// Emisión de token: sin autenticación previa (es el punto de entrada).
 	mux.HandleFunc("POST /api/v1/auth/token", handlers.IssueToken(deps.ClientStore, deps.JWTSecret, deps.TokenTTL, deps.Logger))
@@ -57,9 +62,9 @@ func NewRouter(deps Deps) http.Handler {
 	// estar autenticado, igual que el catálogo.
 	authn := middleware.Authenticate(deps.JWTSecret, deps.Logger)
 	mux.Handle("POST /api/v1/integrations/{integration_id}/send",
-		authn(handlers.Send(deps.Registry, deps.JobManager, deps.AuditStore, deps.Idempotency, deps.Logger)))
+		authn(handlers.Send(deps.Registry, deps.JobManager, deps.AuditStore, deps.Idempotency, deps.BasePath, deps.Logger)))
 	mux.Handle("GET /api/v1/integrations", authn(handlers.Catalog(deps.CatalogStore, deps.Logger)))
-	mux.Handle("GET /api/v1/jobs/{job_id}", authn(handlers.JobStatus(deps.JobStore, deps.Logger)))
+	mux.Handle("GET /api/v1/jobs/{job_id}", authn(handlers.JobStatus(deps.JobStore, deps.BasePath, deps.Logger)))
 	mux.Handle("GET /api/v1/jobs/{job_id}/result", authn(handlers.JobResult(deps.JobStore, deps.Logger)))
 	mux.Handle("POST /api/v1/jobs/{job_id}/ack", authn(handlers.JobAck(deps.JobStore, deps.Logger)))
 

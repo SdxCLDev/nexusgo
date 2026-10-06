@@ -21,7 +21,7 @@ func isTerminal(status jobs.Status) bool {
 	}
 }
 
-func jobStatusResponse(job jobs.Job) dto.JobStatusResponse {
+func jobStatusResponse(job jobs.Job, basePath string) dto.JobStatusResponse {
 	resp := dto.JobStatusResponse{
 		JobID:         job.ID,
 		IntegrationID: job.IntegrationID,
@@ -40,14 +40,14 @@ func jobStatusResponse(job jobs.Job) dto.JobStatusResponse {
 		resp.FinishedAt = &finished
 	}
 	if isTerminal(job.Status) && job.DeliveryMode == jobs.DeliveryPullAPI {
-		resp.ResultURL = "/api/v1/jobs/" + job.ID + "/result"
+		resp.ResultURL = basePath + "/api/v1/jobs/" + job.ID + "/result"
 	}
 	return resp
 }
 
 // JobStatus implementa GET /api/v1/jobs/{job_id} — ver
 // docs/03-contrato-api-rest.md §3.3 y docs/05-patron-asincrono.md §5.6.
-func JobStatus(store jobs.Store, logger *slog.Logger) http.HandlerFunc {
+func JobStatus(store jobs.Store, basePath string, logger *slog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		jobID := r.PathValue("job_id")
 
@@ -61,7 +61,7 @@ func JobStatus(store jobs.Store, logger *slog.Logger) http.HandlerFunc {
 			return
 		}
 
-		httpx.WriteJSON(w, http.StatusOK, jobStatusResponse(job))
+		httpx.WriteJSON(w, http.StatusOK, jobStatusResponse(job, basePath))
 	}
 }
 

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -37,6 +38,14 @@ type Config struct {
 	// JobConcurrency limita cuántos jobs asíncronos se ejecutan en paralelo
 	// — ver docs/05-patron-asincrono.md §5.8 y internal/core/jobmanager.
 	JobConcurrency int
+
+	// PublicBasePath es el prefijo bajo el que un reverse proxy expone a
+	// Nexus (ej. "/nexus" si se publica en https://host/nexus/). Nexus
+	// siempre escucha en la raíz internamente; este valor solo se usa para
+	// construir URLs absolutas en las respuestas (status_url, result_url,
+	// el spec OpenAPI y la página de Swagger UI) de forma que funcionen a
+	// través del proxy. Vacío por defecto (sin proxy, o proxy en la raíz).
+	PublicBasePath string
 }
 
 func Load() (*Config, error) {
@@ -77,7 +86,18 @@ func Load() (*Config, error) {
 		SGPAPIKey:      sgpAPIKey,
 		IdempotencyTTL: time.Duration(idempotencyTTLHours) * time.Hour,
 		JobConcurrency: jobConcurrency,
+		PublicBasePath: normalizeBasePath(getEnv("NEXUS_PUBLIC_BASE_PATH", "")),
 	}, nil
+}
+
+// normalizeBasePath acepta "", "/nexus", "nexus" o "/nexus/" y siempre
+// devuelve "" o una ruta con barra inicial y sin barra final (ej. "/nexus").
+func normalizeBasePath(raw string) string {
+	trimmed := strings.Trim(raw, "/")
+	if trimmed == "" {
+		return ""
+	}
+	return "/" + trimmed
 }
 
 func getEnv(key, fallback string) string {

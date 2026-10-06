@@ -99,6 +99,8 @@ Cuando la integración invocada es de modo `ASYNC`, Nexus responde de inmediato 
 
 HTTP status: `202 Accepted`. Detalle completo del ciclo de vida del job en [Patrón de Integración Asíncrona](05-patron-asincrono.md).
 
+> **Nota sobre despliegue detrás de un reverse proxy en un sub-path**: `status_url` (y `result_url`, ver [Patrón Asíncrono §5.6](05-patron-asincrono.md)) se devuelven con el prefijo configurado en `NEXUS_PUBLIC_BASE_PATH` (ej. `/nexus/api/v1/jobs/{job_id}` si Nexus está publicado en `https://host/nexus/`), de forma que sean usables directamente por el cliente sin que este conozca la topología interna del proxy. Lo mismo aplica al spec servido en `/openapi.json` (campo `servers`) y a la página `/docs`. Ver la sección de despliegue en Linux del `README.md` del repositorio.
+
 ## 3.7 Catálogo de integraciones
 
 ```http

@@ -1,0 +1,22 @@
+[Unit]
+Description=Nexus - integracion SGP (AMD/SAP/PEL)
+After=network.target
+
+[Service]
+Type=simple
+User=nexus
+Group=nexus
+WorkingDirectory=/opt/nexus
+EnvironmentFile=/opt/nexus/nexus.env
+ExecStart=/opt/nexus/nexus
+Restart=on-failure
+RestartSec=5
+
+# Endurecimiento basico (opcional, se puede comentar si da problemas):
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/opt/nexus
+
+[Install]
+WantedBy=multi-user.target

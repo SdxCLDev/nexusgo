@@ -2,6 +2,7 @@
 /bin/
 /nexus
 /nexus.exe
+deploy/nexus
 deploy/nexus.exe
 deploy/nexus.log
 *.log
@@ -17,6 +18,7 @@ deploy/nexus.log
 *.local.yaml
 *.local.yml
 deploy/env.local.ps1
+deploy/nexus.env
 
 # Go
 *.test

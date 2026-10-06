@@ -28,6 +28,7 @@ Variables de entorno (todas opcionales en ambiente `dev`; `NEXUS_JWT_SECRET` y `
 | `NEXUS_TOKEN_TTL_SECONDS` | `900` | Duración del JWT emitido por `/api/v1/auth/token`. |
 | `NEXUS_SGP_API_KEY` | `sgp-dev-local-key` | API Key del cliente `sgp`, sembrado en SQLite en cada arranque. |
 | `NEXUS_JOB_CONCURRENCY` | `5` | Cantidad máxima de jobs asíncronos ejecutándose en paralelo. |
+| `NEXUS_PUBLIC_BASE_PATH` | *(vacío)* | Prefijo si Nexus se publica detrás de un reverse proxy en un sub-path (ej. `/nexus`). Ver [Despliegue en Linux](#despliegue-en-linux-systemd--nginx-reverse-proxy) más abajo. |
 
 ### Probar la autenticación y la integración síncrona de prueba
 
@@ -130,3 +131,66 @@ Invoke-RestMethod http://localhost:8080/health
 Y desde un navegador en el server (o donde tenga acceso a `http://<server>:8080`), abrí **`/docs`** para ver la documentación interactiva de la API y probar los endpoints.
 
 > Si el server está detrás de un firewall, recordá habilitar el puerto configurado en `NEXUS_HTTP_ADDR` (por defecto `8080`) para quien necesite acceder a la API o a `/docs`.
+
+## Despliegue en Linux (systemd + nginx reverse proxy)
+
+Pensado para un server con nginx ya instalado, publicando Nexus en un sub-path (ej. `https://amddev.sodexhochile.cl/nexus`) sin necesidad de abrir un puerto nuevo en el firewall: Nexus escucha solo en `127.0.0.1`, y nginx lo expone a internet por el puerto que ya esté abierto (443/80).
+
+### 1. Compilar
+
+Cross-compilation desde cualquier SO con Go (no requiere CGO ni un toolchain de C, gracias al driver SQLite en Go puro):
+
+```bash
+GOOS=linux GOARCH=amd64 go build -o deploy/nexus ./cmd/nexus
+```
+
+El binario resultante es estático y autocontenido (incluye SQLite y las migraciones embebidas).
+
+### 2. Copiar al server
+
+Transferí al server (`scp`, etc.), por ejemplo a `/opt/nexus/`:
+
+- `deploy/nexus` (el binario)
+- `deploy/nexus.env.example`
+- `deploy/nexus.service`
+
+### 3. Configurar las variables de entorno
+
+```bash
+cd /opt/nexus
+cp nexus.env.example nexus.env
+chmod 600 nexus.env          # contiene secretos
+nano nexus.env               # completar NEXUS_JWT_SECRET, NEXUS_SGP_API_KEY, etc.
+```
+
+Importante: `NEXUS_HTTP_ADDR=127.0.0.1:8080` (Nexus no debe quedar expuesto directamente) y `NEXUS_PUBLIC_BASE_PATH=/nexus` (debe coincidir con el `location` de nginx del paso 5).
+
+### 4. Instalar como servicio systemd
+
+```bash
+sudo useradd --system --no-create-home --shell /usr/sbin/nologin nexus   # si no existe
+sudo chown -R nexus:nexus /opt/nexus
+sudo cp nexus.service /etc/systemd/system/nexus.service
+sudo systemctl daemon-reload
+sudo systemctl enable --now nexus
+sudo systemctl status nexus
+```
+
+`systemctl stop nexus` envía SIGTERM, que Nexus ya maneja con apagado prolijo (cierra el servidor HTTP en curso antes de salir). Logs: `journalctl -u nexus -f`.
+
+### 5. Configurar nginx
+
+`deploy/nexus.nginx.conf` trae el bloque `location /nexus/ { ... }` listo para pegar dentro del `server {}` existente de `amddev.sodexhochile.cl` — compartime ese archivo de sitio cuando lo tengas a mano y lo integro ahí directamente. Después de agregarlo:
+
+```bash
+sudo nginx -t && sudo systemctl reload nginx
+```
+
+### 6. Verificar
+
+```bash
+curl http://127.0.0.1:8080/health          # directo, desde el propio server
+curl https://amddev.sodexhochile.cl/nexus/health   # a través de nginx
+```
+
+Y desde un navegador, `https://amddev.sodexhochile.cl/nexus/docs` para la documentación interactiva de la API.
