@@ -149,6 +149,7 @@ Todas las respuestas de error siguen la misma forma:
 
 | HTTP status | `code` | Significado |
 |---|---|---|
+| 400 | `INVALID_REQUEST` | El cuerpo de la solicitud no es JSON válido o le faltan campos obligatorios, fuera del envelope de integración (ej. `/auth/token`). |
 | 400 | `INVALID_ENVELOPE` | El envelope no cumple la estructura o faltan campos obligatorios. |
 | 400 | `INVALID_PAYLOAD` | El `payload` no cumple el esquema esperado por la integración. |
 | 401 | `UNAUTHORIZED` | Falta autenticación o es inválida. |

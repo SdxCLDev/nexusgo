@@ -1,4 +1,8 @@
-package handlers
+// Package apierr centraliza la traducción de errores de dominio al formato
+// estándar de error del contrato — ver docs/03-contrato-api-rest.md §3.8.
+// Lo usan tanto los handlers como los middlewares (ej. autenticación), que
+// de otro modo duplicarían esta lógica.
+package apierr
 
 import (
 	"errors"
@@ -11,11 +15,10 @@ import (
 	"nexusgo/internal/core"
 )
 
-// writeError traduce cualquier error a la forma estándar de error del
-// contrato (docs/03-contrato-api-rest.md §3.8). Un error que no sea
-// *core.Error se trata como INTERNAL_ERROR y no expone su detalle al
-// llamador (sí queda en el log técnico).
-func writeError(w http.ResponseWriter, logger *slog.Logger, correlationID, integrationID string, err error) {
+// Write traduce err a la respuesta estándar. Un error que no sea *core.Error
+// se trata como INTERNAL_ERROR y no expone su detalle al llamador (sí queda
+// en el log técnico).
+func Write(w http.ResponseWriter, logger *slog.Logger, correlationID, integrationID string, err error) {
 	var coreErr *core.Error
 	if !errors.As(err, &coreErr) {
 		logger.Error("error interno no controlado",

@@ -43,14 +43,14 @@ Fase 11 Pruebas de integración end-to-end y cierre de PoC
 
 **Objetivo**: tener el repositorio Go inicializado y ejecutable, aunque no haga nada todavía.
 
-- [ ] Inicializar repositorio git y `go.mod` (módulo `nexusgo` o el nombre definitivo).
-- [ ] Crear estructura de carpetas base según [Arquitectura §2.2](02-arquitectura.md#22-estructura-de-carpetas-go) (`cmd/nexus`, `internal/...`).
-- [ ] Configurar `internal/config`: carga de configuración vía variables de entorno + archivo (ej. YAML), con valores por defecto razonables para desarrollo local.
-- [ ] Configurar `internal/logging` con `log/slog` en formato JSON (ver [Logging y Auditoría §7.1](07-logging-auditoria.md#71-logging-técnico)).
-- [ ] `cmd/nexus/main.go` levanta un servidor HTTP mínimo con `GET /health` y `GET /ready` (ver [Contrato API REST §3.3](03-contrato-api-rest.md#33-endpoints)).
-- [ ] Script/Makefile básico: `run`, `build`, `test`.
+- [x] Inicializar repositorio git y `go.mod` (módulo `nexusgo` o el nombre definitivo).
+- [x] Crear estructura de carpetas base según [Arquitectura §2.2](02-arquitectura.md#22-estructura-de-carpetas-go) (`cmd/nexus`, `internal/...`).
+- [x] Configurar `internal/config`: carga de configuración vía variables de entorno, con valores por defecto razonables para desarrollo local. *(Nota: no se implementó carga desde archivo YAML; se evaluará si realmente hace falta antes de agregarla — por ahora las variables de entorno cubren la PoC.)*
+- [x] Configurar `internal/logging` con `log/slog` en formato JSON (ver [Logging y Auditoría §7.1](07-logging-auditoria.md#71-logging-técnico)).
+- [x] `cmd/nexus/main.go` levanta un servidor HTTP mínimo con `GET /health` y `GET /ready` (ver [Contrato API REST §3.3](03-contrato-api-rest.md#33-endpoints)).
+- [x] Comandos básicos (`go build`, `go vet`, `go test`) documentados en `README.md`. *(Nota: sin Makefile — el entorno de desarrollo es Windows sin `make`; los comandos de Go son suficientes y evitan una dependencia extra.)*
 
-**Criterio de aceptación**: el binario compila, levanta, y `GET /health` responde `200`.
+**Criterio de aceptación**: el binario compila, levanta, y `GET /health` responde `200`. ✅ Verificado.
 
 ---
 
@@ -58,14 +58,15 @@ Fase 11 Pruebas de integración end-to-end y cierre de PoC
 
 **Objetivo**: tener el "tubo" de enrutamiento de integraciones funcionando, sin lógica de negocio real todavía.
 
-- [ ] Definir en `internal/core`: `Integration`, `AsyncIntegration`, `Metadata`, `SendRequest`, `SendResult` (ver [Arquitectura §2.3](02-arquitectura.md#23-contrato-interno-interfaz-integration)).
-- [ ] Definir el envelope genérico (`internal/core/envelope.go`) según [Contrato API REST §3.4](03-contrato-api-rest.md#34-envelope-de-solicitud-send) y su validación básica (campos obligatorios).
-- [ ] Implementar `core.Registry` (alta/búsqueda de integraciones por `integration_id`).
-- [ ] Implementar handler `POST /integrations/{integration_id}/send` que: valida envelope → busca en `Registry` → si no existe, `404 INTEGRATION_NOT_FOUND` → si existe y es `SYNC`, invoca `HandleSend` y devuelve el resultado mapeado al formato estándar.
-- [ ] Implementar handler `GET /integrations` (catálogo, en memoria por ahora, reflejando lo registrado).
-- [ ] Middlewares base: recovery (captura panics) y logging de requests (sin auth todavía).
+- [x] Definir en `internal/core`: `Integration`, `Metadata`, `SendRequest`, `SendResult` (ver [Arquitectura §2.3](02-arquitectura.md#23-contrato-interno-interfaz-integration)). *(Nota: `AsyncIntegration` se difiere explícitamente a la Fase 5 — definirla ahora acoplaría `core` con `core/jobmanager` en un ciclo de importación; se resolverá al diseñar el Job Manager.)*
+- [x] Definir el envelope genérico (`internal/core/envelope.go`) según [Contrato API REST §3.4](03-contrato-api-rest.md#34-envelope-de-solicitud-send) y su validación básica (campos obligatorios).
+- [x] Implementar `core.Registry` (alta/búsqueda de integraciones por `integration_id`).
+- [x] Implementar handler `POST /integrations/{integration_id}/send` que: valida envelope → busca en `Registry` → si no existe, `404 INTEGRATION_NOT_FOUND` → si existe y es `SYNC`, invoca `HandleSend` y devuelve el resultado mapeado al formato estándar. Las integraciones `ASYNC` responden `503 INTEGRATION_UNAVAILABLE` hasta la Fase 5.
+- [x] Implementar handler `GET /integrations` (catálogo, en memoria por ahora, reflejando lo registrado).
+- [x] Middlewares base: recovery (captura panics) y logging de requests.
+- [x] Integración `mock-echo` (`internal/integrations/mock`) y pruebas automatizadas del router (`internal/api/router_test.go`).
 
-**Criterio de aceptación**: se puede registrar una integración de prueba hardcodeada y probarla con `curl`/Postman end-to-end (sin DB, sin auth).
+**Criterio de aceptación**: se puede registrar una integración de prueba y probarla end-to-end (sin DB, sin auth todavía). ✅ Verificado con `curl` y pruebas automatizadas.
 
 ---
 
@@ -73,14 +74,16 @@ Fase 11 Pruebas de integración end-to-end y cierre de PoC
 
 **Objetivo**: proteger los endpoints funcionales con el esquema API Key + JWT.
 
-- [ ] Modelar `clients` en memoria primero (lista fija de prueba), luego migrar a SQLite en la Fase 4.
-- [ ] Implementar `POST /auth/token`: valida `client_id` + `api_key`, emite JWT firmado (RS256 o HS256 para la PoC — ver nota de simplificación abajo) con `scopes` (ver [Autenticación y Seguridad §6.1](06-autenticacion-seguridad.md#61-autenticación-de-entrada-api-key--jwt)).
-- [ ] Middleware de autenticación: valida `Authorization: Bearer <jwt>`, extrae `scopes`, rechaza con `401`/`403` según corresponda.
-- [ ] Aplicar el middleware a todos los endpoints funcionales excepto `/health`, `/ready`, `/auth/token`.
+- [x] Modelar `clients` en memoria (`internal/auth.ClientStore`/`InMemoryClientStore`, un cliente `sgp` sembrado al arrancar); se migra a SQLite en la Fase 4 sin cambiar la interfaz.
+- [x] Implementar `POST /auth/token`: valida `client_id` + `api_key`, emite JWT firmado (HS256 para la PoC — ver nota de simplificación abajo) con `scopes` (ver [Autenticación y Seguridad §6.1](06-autenticacion-seguridad.md#61-autenticación-de-entrada-api-key--jwt)).
+- [x] Middleware de autenticación (`internal/api/middleware.Authenticate`): valida `Authorization: Bearer <jwt>` y deja los claims en el contexto; el chequeo de `scope` por `integration_id` se hace en el handler `Send` (el patrón de ruteo de `net/http` no expone las variables de ruta a un middleware que envuelve el mux completo).
+- [x] Middleware aplicado a los endpoints funcionales (`send`, `catalog`); `/health`, `/ready` y `/auth/token` quedan sin autenticación.
 
 > **Simplificación aceptada para la PoC**: usar HS256 (clave simétrica compartida vía variable de entorno) en lugar de RS256 es aceptable mientras Nexus es un único proceso. Si en el futuro se separan componentes (ej. un validador de tokens independiente), migrar a RS256. Dejar esto registrado como decisión técnica de la PoC, no del diseño final.
+>
+> **Segunda simplificación aceptada**: el hash de API Keys usa SHA-256 en vez de bcrypt/argon2 (mencionados como referencia en [Autenticación y Seguridad §6.1.5](06-autenticacion-seguridad.md#615-gestión-de-api-keys)). Es aceptable porque las API Keys de Nexus son generadas aleatoriamente con alta entropía (`auth.GenerateAPIKey`, 32 bytes) — a diferencia de una contraseña elegida por una persona, no hace falta un hash lento para resistir fuerza bruta. Evita además sumar una dependencia externa (bcrypt/argon2 no están en la librería estándar de Go).
 
-**Criterio de aceptación**: sin token válido, cualquier endpoint funcional responde `401`; con token y `scope` correcto, responde normalmente; con `scope` incorrecto, `403`.
+**Criterio de aceptación**: sin token válido, cualquier endpoint funcional responde `401`; con token y `scope` correcto, responde normalmente; con `scope` incorrecto, `403`. ✅ Verificado con pruebas automatizadas (`router_test.go`) y manualmente con `curl`.
 
 ---
 

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"nexusgo/internal/api"
+	"nexusgo/internal/auth"
 	"nexusgo/internal/config"
 	"nexusgo/internal/core"
 	"nexusgo/internal/integrations/mock"
@@ -27,7 +28,8 @@ func main() {
 	logger := logging.New(cfg)
 
 	reg := buildRegistry()
-	router := api.NewRouter(logger, reg)
+	clientStore := buildClientStore(cfg)
+	router := api.NewRouter(logger, reg, clientStore, []byte(cfg.JWTSecret), cfg.TokenTTL)
 
 	srv := &http.Server{
 		Addr:    cfg.HTTPAddr,
@@ -64,4 +66,20 @@ func buildRegistry() *core.Registry {
 	reg.Register(mock.NewEchoIntegration())
 
 	return reg
+}
+
+// buildClientStore siembra los clientes autorizados en memoria — ver
+// docs/08-modelo-datos.md §8.1. Se reemplaza por persistencia en SQLite en
+// la Fase 4; la interfaz auth.ClientStore no cambia para sus consumidores.
+func buildClientStore(cfg *config.Config) *auth.InMemoryClientStore {
+	store := auth.NewInMemoryClientStore()
+
+	store.Upsert(auth.Client{
+		ID:         "sgp",
+		APIKeyHash: auth.HashAPIKey(cfg.SGPAPIKey),
+		Scopes:     []string{"integration:mock-echo:invoke"},
+		Status:     auth.ClientStatusActive,
+	})
+
+	return store
 }

@@ -34,3 +34,14 @@ type IntegrationSummary struct {
 type CatalogResponse struct {
 	Integrations []IntegrationSummary `json:"integrations"`
 }
+
+type TokenRequest struct {
+	ClientID string `json:"client_id"`
+	APIKey   string `json:"api_key"`
+}
+
+type TokenResponse struct {
+	AccessToken string `json:"access_token"`
+	TokenType   string `json:"token_type"`
+	ExpiresIn   int    `json:"expires_in"`
+}

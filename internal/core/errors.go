@@ -7,8 +7,11 @@ import (
 
 // Códigos de error estándar del contrato — ver docs/03-contrato-api-rest.md §3.8.
 const (
+	CodeInvalidRequest         = "INVALID_REQUEST"
 	CodeInvalidEnvelope        = "INVALID_ENVELOPE"
 	CodeInvalidPayload         = "INVALID_PAYLOAD"
+	CodeUnauthorized           = "UNAUTHORIZED"
+	CodeForbidden              = "FORBIDDEN"
 	CodeIntegrationNotFound    = "INTEGRATION_NOT_FOUND"
 	CodeExternalSystemError    = "EXTERNAL_SYSTEM_ERROR"
 	CodeBusinessRuleRejected   = "BUSINESS_RULE_REJECTED"
@@ -40,12 +43,24 @@ func newError(code string, httpStatus int, format string, args ...any) *Error {
 	return &Error{Code: code, HTTPStatus: httpStatus, Message: cause.Error(), cause: cause}
 }
 
+func NewInvalidRequestError(format string, args ...any) *Error {
+	return newError(CodeInvalidRequest, http.StatusBadRequest, format, args...)
+}
+
 func NewEnvelopeError(format string, args ...any) *Error {
 	return newError(CodeInvalidEnvelope, http.StatusBadRequest, format, args...)
 }
 
 func NewValidationError(format string, args ...any) *Error {
 	return newError(CodeInvalidPayload, http.StatusBadRequest, format, args...)
+}
+
+func NewUnauthorizedError(format string, args ...any) *Error {
+	return newError(CodeUnauthorized, http.StatusUnauthorized, format, args...)
+}
+
+func NewForbiddenError(format string, args ...any) *Error {
+	return newError(CodeForbidden, http.StatusForbidden, format, args...)
 }
 
 func NewNotFoundError(format string, args ...any) *Error {
