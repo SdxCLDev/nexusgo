@@ -80,13 +80,14 @@ func newTestRouter(t *testing.T, store auth.ClientStore, integrations ...core.In
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	auditStore := audit.NewInMemoryStore()
 	router := api.NewRouter(api.Deps{
-		Logger:      logger,
-		Registry:    reg,
-		ClientStore: store,
-		JWTSecret:   testJWTSecret,
-		TokenTTL:    testTokenTTL,
-		AuditStore:  auditStore,
-		Idempotency: idempotency.NewStore(testIdempotencyTTL),
+		Logger:       logger,
+		Registry:     reg,
+		CatalogStore: reg,
+		ClientStore:  store,
+		JWTSecret:    testJWTSecret,
+		TokenTTL:     testTokenTTL,
+		AuditStore:   auditStore,
+		Idempotency:  idempotency.NewStore(testIdempotencyTTL),
 	})
 	return router, auditStore
 }

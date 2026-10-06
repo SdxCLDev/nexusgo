@@ -106,14 +106,22 @@ Fase 11 Pruebas de integración end-to-end y cierre de PoC
 
 **Objetivo**: reemplazar las estructuras en memoria de las fases anteriores por persistencia real, usando SQLite (ver [Modelo de Datos §8.8](08-modelo-datos.md#88-nota-sobre-el-motor-de-base-de-datos-sqlite-en-la-poc--postgresql-a-futuro)).
 
-- [ ] Elegir y configurar driver SQLite para Go (ej. `mattn/go-sqlite3` o `modernc.org/sqlite` — preferir este último si se quiere evitar CGO para mantener el binario único sin dependencias de compilador C).
-- [ ] Configurar herramienta de migraciones versionadas (ej. `golang-migrate`) y escribir las migraciones iniciales para `clients`, `integrations`, `audit_log` (las de `jobs`/`job_items` se agregan en la Fase 5).
-- [ ] Migrar `clients` desde la lista en memoria (Fase 2) a la tabla real.
-- [ ] Migrar el catálogo de `integrations` (Fase 1) a la tabla real, poblada al arranque desde el `Registry`.
-- [ ] Migrar `internal/audit` (Fase 3) para escribir en SQLite en vez de memoria.
-- [ ] Reforzar en el código las reglas de compatibilidad futura con PostgreSQL (UUIDs generados en Go, timestamps en ISO 8601, sin `PRAGMA`/funciones específicas de SQLite en queries de negocio).
+- [x] Elegir y configurar driver SQLite para Go: `modernc.org/sqlite` (Go puro, sin CGO) — ver la nota de driver en [Arquitectura §2.6](02-arquitectura.md#26-decisiones-técnicas-sugeridas). Confirmado necesario: el entorno de desarrollo de esta PoC no tiene compilador de C instalado, por lo que `mattn/go-sqlite3` (CGO) no habría compilado.
+- [x] Migraciones versionadas con un runner mínimo hecho a mano (`internal/storage/sqlite/sqlite.go`), en vez de `golang-migrate` — ver nota abajo. Migraciones iniciales para `clients`, `integrations`, `audit_log` en `internal/storage/sqlite/migrations/*.sql` (las de `jobs`/`job_items` se agregan en la Fase 5).
+- [x] `internal/storage/sqlite.ClientStore` implementa `auth.ClientStore`; reemplaza a `auth.InMemoryClientStore` en `main.go` (que se mantiene como implementación válida para pruebas rápidas del paquete `internal/api`).
+- [x] `internal/storage/sqlite.CatalogStore` implementa la nueva interfaz `core.CatalogStore`; el handler `GET /integrations` ahora lee de ahí (status persistido) en vez de leer directo del `Registry` en memoria. `*core.Registry` también implementa `core.CatalogStore` (todo "ACTIVE"), útil como catálogo de referencia y en pruebas sin base de datos.
+- [x] `internal/storage/sqlite.AuditStore` implementa `audit.Store`; reemplaza a `audit.InMemoryStore` en `main.go` (que también se mantiene para pruebas). La inmutabilidad de [§7.2.4](07-logging-auditoria.md#724-inmutabilidad) se refuerza a nivel SQL (`UPDATE ... WHERE finished_at IS NULL`).
+- [x] Reglas de compatibilidad futura con PostgreSQL aplicadas: UUIDs generados en Go (`core.NewID`), timestamps en TEXT/ISO 8601 UTC, JSON serializado como TEXT, sin `PRAGMA` ni funciones específicas de SQLite en las consultas de negocio (los `PRAGMA` de configuración de conexión —`busy_timeout`, `journal_mode`, `foreign_keys`— viven solo en el DSN de `sqlite.Open`, no en queries).
 
-**Criterio de aceptación**: al reiniciar el proceso, clientes, catálogo y auditoría persisten (no se pierden); los datos son consultables directamente en el archivo `.db` con cualquier cliente SQLite.
+> **Simplificación aceptada para la PoC**: en vez de `golang-migrate` (sugerido originalmente), se implementó un runner de migraciones propio de ~80 líneas (`internal/storage/sqlite/sqlite.go`): lee los `.sql` embebidos con `go:embed`, los aplica en orden dentro de una transacción y registra cada uno en `schema_migrations`. Para migraciones puramente DDL como las de esta PoC es suficiente y evita sumar una dependencia más con su propio CLI/convenciones. Si las migraciones crecen en complejidad (datos, rollbacks condicionales), reevaluar `golang-migrate` en una fase posterior.
+>
+> **Nota sobre la ubicación de `migrations/`**: terminaron en `internal/storage/sqlite/migrations/` y no en un `migrations/` a nivel de repositorio como sugería originalmente [Arquitectura §2.2](02-arquitectura.md#22-estructura-de-carpetas-go), porque `go:embed` no admite rutas que suban de directorio. Documento de arquitectura actualizado para reflejarlo.
+>
+> **Nota sobre el `go.mod`**: `modernc.org/sqlite` en su versión más reciente exige Go ≥ 1.26; se fijaron versiones algo más antiguas de `modernc.org/sqlite`/`modernc.org/libc`/`golang.org/x/sys` para quedarse en Go 1.24 (la versión ya instalada y documentada en `README.md`) sin forzar una migración de toolchain como efecto secundario de agregar persistencia. Ver detalle en [Arquitectura §2.6](02-arquitectura.md#26-decisiones-técnicas-sugeridas).
+>
+> **Pendiente, fuera de alcance de esta fase**: `internal/core/idempotency` (Fase 3) sigue en memoria — no hay tabla de idempotencia en [Modelo de Datos](08-modelo-datos.md), por lo que no estaba en el checklist de esta fase. Implica que un reinicio del proceso durante la ventana de deduplicación permitiría reprocesar un `correlation_id` que debería haberse cacheado. Evaluar si esto necesita persistirse en una fase posterior (candidato natural: Fase 9 o 10).
+
+**Criterio de aceptación**: al reiniciar el proceso, clientes, catálogo y auditoría persisten (no se pierden); los datos son consultables directamente en el archivo `.db` con cualquier cliente SQLite. ✅ Verificado con pruebas automatizadas (`internal/storage/sqlite/sqlite_test.go`) y manualmente: se levantó el proceso, se sembró un cliente y se ejecutó una integración, se reinició el proceso contra el mismo archivo `.db`, y tanto el cliente como el catálogo y el registro de auditoría siguieron disponibles.
 
 ---
 

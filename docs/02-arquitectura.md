@@ -88,14 +88,19 @@ nexusgo/
 │   ├── logging/
 │   │   └── logger.go                 # logger estructurado (ej. slog/zap)
 │   ├── storage/
-│   │   ├── jobstore/                  # persistencia de jobs
-│   │   └── credentialstore/           # almacenamiento seguro de credenciales externas
+│   │   └── sqlite/
+│   │       ├── sqlite.go               # Open() + runner de migraciones embebidas
+│   │       ├── clientstore.go          # auth.ClientStore sobre SQLite
+│   │       ├── catalogstore.go         # core.CatalogStore sobre SQLite
+│   │       ├── auditstore.go           # audit.Store sobre SQLite
+│   │       └── migrations/*.sql        # ver nota debajo
 │   └── config/
 │       └── config.go                  # carga de configuración (env, archivo)
-├── migrations/                        # scripts de base de datos de Nexus
 ├── docs/
 └── go.mod
 ```
+
+> **Nota sobre `migrations/`**: la Fase 4 ubicó las migraciones en `internal/storage/sqlite/migrations/` en vez del `migrations/` a nivel de repositorio sugerido originalmente en este documento. `go:embed` no admite patrones que suban de directorio (`../`), por lo que el único lugar válido para embeberlas junto al código que las aplica es dentro del propio paquete `internal/storage/sqlite`. Mantiene igualmente el objetivo de binario único: las migraciones viajan embebidas en el ejecutable, no como archivos sueltos a distribuir aparte.
 
 ## 2.3 Contrato interno: interfaz `Integration`
 
@@ -197,6 +202,10 @@ Cada integración específica (ej. `internal/integrations/amd`) usa estos adapta
 Estas decisiones son sugerencias de partida; deben confirmarse con el equipo según los estándares de infraestructura de Sodexo antes de la implementación.
 
 > **Nota sobre la base de datos (fase de prueba de concepto)**: mientras el proyecto está en etapa de PoC, Nexus usa **SQLite** como motor de persistencia (un único archivo `.db`, sin servidor externo), lo que simplifica el desarrollo y las pruebas locales. El acceso a datos debe implementarse a través de `database/sql` con sentencias SQL estándar (evitando funciones o tipos específicos de SQLite) y, de ser posible, con un query builder/ORM liviano que soporte múltiples dialectos (ej. `sqlx` + migraciones compatibles), de forma que la migración futura a **PostgreSQL** —cuando el proyecto madure— implique principalmente cambiar el driver y el DSN de conexión, no reescribir la capa de acceso a datos. Ver detalle de consideraciones de compatibilidad en [Modelo de Datos §8.8](08-modelo-datos.md#88-nota-sobre-el-motor-de-base-de-datos-sqlite-en-la-poc--postgresql-a-futuro).
+>
+> **Driver elegido**: `modernc.org/sqlite` — una reimplementación de SQLite en Go puro (sin CGO). Se descartó `mattn/go-sqlite3` (el binding más popular) porque requiere un compilador de C disponible en cada máquina que compile Nexus, lo que choca con el objetivo de "binario único, fácil de compilar en cualquier entorno" y además no es viable en el entorno de desarrollo usado para esta PoC (Windows sin toolchain de C instalado).
+>
+> **Atención al actualizar esta dependencia**: a partir de `modernc.org/sqlite v1.60.1` (y de su dependencia transitiva `golang.org/x/sys`), el paquete exige Go **≥ 1.26**. Para no forzar esa migración de toolchain sin decisión explícita del equipo, `go.mod` fija versiones más antiguas y compatibles con Go 1.24 (`modernc.org/sqlite v1.34.1`, `modernc.org/libc v1.55.3`, `golang.org/x/sys v0.27.0`/`v0.31.0`). Un `go get -u` o `go get modernc.org/sqlite@latest` sin cuidado volvería a subir el requisito a Go 1.26 — si se decide adoptar Go 1.26, hacerlo como una decisión consciente (actualizar también `go.mod` y la versión de Go documentada en `README.md`), no como efecto secundario de actualizar una dependencia.
 
 ## 2.7 Middlewares de la API
 

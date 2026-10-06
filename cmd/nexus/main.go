@@ -11,13 +11,14 @@ import (
 	"time"
 
 	"nexusgo/internal/api"
-	"nexusgo/internal/audit"
+	"nexusgo/internal/api/handlers"
 	"nexusgo/internal/auth"
 	"nexusgo/internal/config"
 	"nexusgo/internal/core"
 	"nexusgo/internal/core/idempotency"
 	"nexusgo/internal/integrations/mock"
 	"nexusgo/internal/logging"
+	"nexusgo/internal/storage/sqlite"
 )
 
 func main() {
@@ -28,15 +29,44 @@ func main() {
 	}
 
 	logger := logging.New(cfg)
+	ctx := context.Background()
+
+	db, err := sqlite.Open(ctx, cfg.DBPath)
+	if err != nil {
+		logger.Error("no se pudo inicializar la base de datos", "error", err)
+		os.Exit(1)
+	}
+	defer db.Close()
+
+	clientStore := sqlite.NewClientStore(db)
+	if err := seedClients(ctx, clientStore, cfg); err != nil {
+		logger.Error("no se pudo sembrar los clientes iniciales", "error", err)
+		os.Exit(1)
+	}
+
+	reg := buildRegistry()
+	catalogStore := sqlite.NewCatalogStore(db)
+	if err := catalogStore.Sync(ctx, reg.List()); err != nil {
+		logger.Error("no se pudo sincronizar el catálogo de integraciones", "error", err)
+		os.Exit(1)
+	}
 
 	router := api.NewRouter(api.Deps{
-		Logger:      logger,
-		Registry:    buildRegistry(),
-		ClientStore: buildClientStore(cfg),
-		JWTSecret:   []byte(cfg.JWTSecret),
-		TokenTTL:    cfg.TokenTTL,
-		AuditStore:  audit.NewInMemoryStore(),
-		Idempotency: idempotency.NewStore(cfg.IdempotencyTTL),
+		Logger:       logger,
+		Registry:     reg,
+		CatalogStore: catalogStore,
+		ClientStore:  clientStore,
+		JWTSecret:    []byte(cfg.JWTSecret),
+		TokenTTL:     cfg.TokenTTL,
+		AuditStore:   sqlite.NewAuditStore(db),
+		Idempotency:  idempotency.NewStore(cfg.IdempotencyTTL),
+		ReadyChecks: []handlers.ReadyCheck{
+			func() error {
+				pingCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+				defer cancel()
+				return db.PingContext(pingCtx)
+			},
+		},
 	})
 
 	srv := &http.Server{
@@ -45,7 +75,7 @@ func main() {
 	}
 
 	go func() {
-		logger.Info("iniciando servidor", "addr", cfg.HTTPAddr, "env", cfg.Env)
+		logger.Info("iniciando servidor", "addr", cfg.HTTPAddr, "env", cfg.Env, "db_path", cfg.DBPath)
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			logger.Error("error del servidor", "error", err)
 			os.Exit(1)
@@ -57,10 +87,10 @@ func main() {
 	<-stop
 
 	logger.Info("apagando servidor")
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	if err := srv.Shutdown(ctx); err != nil {
+	if err := srv.Shutdown(shutdownCtx); err != nil {
 		logger.Error("error durante el apagado", "error", err)
 	}
 }
@@ -76,18 +106,15 @@ func buildRegistry() *core.Registry {
 	return reg
 }
 
-// buildClientStore siembra los clientes autorizados en memoria — ver
-// docs/08-modelo-datos.md §8.1. Se reemplaza por persistencia en SQLite en
-// la Fase 4; la interfaz auth.ClientStore no cambia para sus consumidores.
-func buildClientStore(cfg *config.Config) *auth.InMemoryClientStore {
-	store := auth.NewInMemoryClientStore()
-
-	store.Upsert(auth.Client{
+// seedClients da de alta los clientes autorizados de la PoC — ver
+// docs/08-modelo-datos.md §8.1. El alta administrativa real de clientes
+// queda fuera de alcance de esta fase (ver docs/10-plan-de-trabajo-poc.md
+// Fase 10); por ahora Nexus siembra el cliente "sgp" en cada arranque.
+func seedClients(ctx context.Context, store *sqlite.ClientStore, cfg *config.Config) error {
+	return store.Upsert(ctx, auth.Client{
 		ID:         "sgp",
 		APIKeyHash: auth.HashAPIKey(cfg.SGPAPIKey),
 		Scopes:     []string{"integration:mock-echo:invoke"},
 		Status:     auth.ClientStatusActive,
 	})
-
-	return store
 }

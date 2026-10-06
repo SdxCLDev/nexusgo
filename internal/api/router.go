@@ -18,14 +18,15 @@ import (
 // lista de parámetros individuales ya era larga y crece con cada fase del
 // plan de trabajo (ver docs/10-plan-de-trabajo-poc.md).
 type Deps struct {
-	Logger      *slog.Logger
-	Registry    *core.Registry
-	ClientStore auth.ClientStore
-	JWTSecret   []byte
-	TokenTTL    time.Duration
-	AuditStore  audit.Store
-	Idempotency *idempotency.Store
-	ReadyChecks []handlers.ReadyCheck
+	Logger       *slog.Logger
+	Registry     *core.Registry
+	CatalogStore core.CatalogStore
+	ClientStore  auth.ClientStore
+	JWTSecret    []byte
+	TokenTTL     time.Duration
+	AuditStore   audit.Store
+	Idempotency  *idempotency.Store
+	ReadyChecks  []handlers.ReadyCheck
 }
 
 func NewRouter(deps Deps) http.Handler {
@@ -44,7 +45,7 @@ func NewRouter(deps Deps) http.Handler {
 	authn := middleware.Authenticate(deps.JWTSecret, deps.Logger)
 	mux.Handle("POST /api/v1/integrations/{integration_id}/send",
 		authn(handlers.Send(deps.Registry, deps.AuditStore, deps.Idempotency, deps.Logger)))
-	mux.Handle("GET /api/v1/integrations", authn(handlers.Catalog(deps.Registry)))
+	mux.Handle("GET /api/v1/integrations", authn(handlers.Catalog(deps.CatalogStore, deps.Logger)))
 
 	var h http.Handler = mux
 	h = middleware.Logging(deps.Logger)(h)

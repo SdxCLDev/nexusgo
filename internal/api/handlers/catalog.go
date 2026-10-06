@@ -1,31 +1,35 @@
 package handlers
 
 import (
+	"log/slog"
 	"net/http"
 
+	"nexusgo/internal/api/apierr"
 	"nexusgo/internal/api/dto"
 	"nexusgo/internal/api/httpx"
 	"nexusgo/internal/core"
 )
 
 // Catalog implementa GET /api/v1/integrations — ver docs/03-contrato-api-rest.md §3.7.
-//
-// En esta fase el catálogo refleja únicamente lo registrado en memoria al
-// arrancar el proceso; status siempre se reporta "ACTIVE". El estado
-// persistido (ej. integraciones deshabilitadas) llega con la Fase 4.
-func Catalog(reg *core.Registry) http.HandlerFunc {
+// Lee de core.CatalogStore (respaldado en SQLite en producción desde la
+// Fase 4) para reflejar el status persistido, no solo lo compilado en el binario.
+func Catalog(store core.CatalogStore, logger *slog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		metas := reg.List()
+		entries, err := store.Catalog(r.Context())
+		if err != nil {
+			apierr.Write(w, logger, "", "", core.NewInternalError("no se pudo obtener el catálogo: %w", err))
+			return
+		}
 
-		items := make([]dto.IntegrationSummary, 0, len(metas))
-		for _, m := range metas {
+		items := make([]dto.IntegrationSummary, 0, len(entries))
+		for _, e := range entries {
 			items = append(items, dto.IntegrationSummary{
-				IntegrationID: m.ID,
-				Name:          m.Name,
-				Direction:     string(m.Direction),
-				Mode:          string(m.Mode),
-				Version:       m.Version,
-				Status:        "ACTIVE",
+				IntegrationID: e.IntegrationID,
+				Name:          e.Name,
+				Direction:     e.Direction,
+				Mode:          e.Mode,
+				Version:       e.Version,
+				Status:        e.Status,
 			})
 		}
 

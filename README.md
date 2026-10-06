@@ -6,11 +6,13 @@ Documentación de especificación completa en [`docs/`](docs/README.md). Plan de
 
 ## Desarrollo local
 
-Requiere Go 1.24+.
+Requiere Go 1.24+ (el `go.mod` fija deliberadamente esa versión — ver nota sobre `modernc.org/sqlite` en `docs/02-arquitectura.md` §2.6 antes de actualizar esa dependencia).
 
 ```bash
 go run ./cmd/nexus
 ```
+
+Al arrancar, Nexus crea (si no existe) el archivo SQLite indicado por `NEXUS_DB_PATH` y aplica las migraciones pendientes automáticamente — no requiere un paso manual aparte.
 
 Variables de entorno (todas opcionales en ambiente `dev`; `NEXUS_JWT_SECRET` y `NEXUS_SGP_API_KEY` son obligatorias en cualquier otro ambiente):
 
@@ -22,7 +24,7 @@ Variables de entorno (todas opcionales en ambiente `dev`; `NEXUS_JWT_SECRET` y `
 | `NEXUS_DB_PATH` | `nexus.db` | Ruta del archivo SQLite (PoC). |
 | `NEXUS_JWT_SECRET` | clave insegura de desarrollo | Clave HS256 para firmar los JWT (ver `docs/06-autenticacion-seguridad.md`). |
 | `NEXUS_TOKEN_TTL_SECONDS` | `900` | Duración del JWT emitido por `/api/v1/auth/token`. |
-| `NEXUS_SGP_API_KEY` | `sgp-dev-local-key` | API Key del cliente `sgp` sembrado en memoria durante la PoC. |
+| `NEXUS_SGP_API_KEY` | `sgp-dev-local-key` | API Key del cliente `sgp`, sembrado en SQLite en cada arranque. |
 
 ### Probar la autenticación localmente
 
