@@ -1,0 +1,24 @@
+# Binarios
+/bin/
+nexus
+nexus.exe
+
+# Base de datos local (PoC con SQLite)
+*.db
+*.db-journal
+*.db-shm
+*.db-wal
+
+# Configuración local / secretos
+.env
+*.local.yaml
+*.local.yml
+
+# Go
+*.test
+*.out
+
+# Editores / OS
+.vscode/
+.idea/
+Thumbs.db
