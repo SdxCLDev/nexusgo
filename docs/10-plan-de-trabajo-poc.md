@@ -165,14 +165,22 @@ Fase 11 Pruebas de integración end-to-end y cierre de PoC
 
 ### Fase 7 — Integración real: AMD (asíncrona — descarga de minutas)
 
-**Bloqueada hasta recibir la documentación de AMD** (puede entregarse junto con la de Fase 6 o por separado).
+Documentación de AMD recibida (flujo: autenticación → encabezados → detalle por minuta). Implementada la descarga end-to-end entregando por `pull_api`; la entrega `push_db` hacia la base de datos de SGP queda pendiente (pasos 4-5 del flujo, a definir más adelante).
 
-- [ ] Completar ficha de integración para `amd-to-sgp-descarga-minuta` (o el nombre real que corresponda), confirmando: endpoint de autenticación, endpoint de encabezados, endpoint de detalle, endpoint de actualización de estado (ver flujo de referencia en [Patrón Asíncrono §5.3](05-patron-asincrono.md#53-flujo-end-to-end)).
-- [ ] Implementar `Execute` sobre `core.AsyncIntegration` para esta integración: autenticación, consulta de encabezados, consulta de detalle por encabezado (con límite de concurrencia, ver [§5.8](05-patron-asincrono.md#58-control-de-concurrencia-y-protección-del-sistema-externo)), validación, actualización de estado en AMD al finalizar cada minuta.
-- [ ] Definir y confirmar con el equipo de SGP el `delivery_mode` real a usar para esta integración (`push_db` o `pull_api`) — reemplaza el mecanismo simulado de la Fase 5 por el real.
-- [ ] Pruebas con stub de AMD simulando: lote completo exitoso, lote con fallas parciales, falla total de autenticación.
+- [x] Completar ficha de integración para `amd-to-sgp-descarga-minuta` — ver [docs/ficha-amd-to-sgp-descarga-minuta.md](ficha-amd-to-sgp-descarga-minuta.md). El proceso descarga **todas las minutas pendientes**, sin filtros de entrada.
+- [x] Implementar `Execute` sobre `core.AsyncIntegration` (`internal/integrations/amd`): autenticación (canje usuario/clave por `api_token` cacheado, reautenticación ante 401), consulta de encabezados (`amd_get_minutasintegra`), consulta de detalle por minuta (`amd_getMinutaIntegracion`) con límite de concurrencia configurable (`NEXUS_AMD_DETAIL_CONCURRENCY`, ver [§5.8](05-patron-asincrono.md#58-control-de-concurrencia-y-protección-del-sistema-externo)), y validación estructural. El `usuario` del query de encabezados se deriva del `id` devuelto por el login; `ceco=-1` (todas).
+- [x] `delivery_mode`: se usa `pull_api` por ahora — las minutas quedan revisables en `GET /jobs/{job_id}/result`. La inserción directa en la base de datos de SGP (`push_db`) se implementará en una fase posterior, reemplazando la entrega sin reescribir la integración.
+- [x] Adaptador REST reutilizable `internal/adapters/restclient` (timeouts, reintentos con backoff, redacción de headers sensibles) — no existía; se construyó en esta fase (estaba previsto como prerequisito de las Fases 6/8).
+- [x] Pruebas con stub de AMD (`httptest.Server`): lote completo exitoso, lote con fallas parciales (`PARTIAL`), falla total de autenticación (`FAILED`), reautenticación tras 401; más pruebas unitarias del mapper/validación.
+- [x] Endpoint `GET /api/v1/jobs` (listado paginado por `integration_id`, [§3.10](03-contrato-api-rest.md#310-paginación-catálogo-y-listados-futuros)) para descubrir descargas pasadas sin recordar el `job_id`.
 
-**Criterio de aceptación**: el flujo replica exactamente el descrito en [Patrón Asíncrono §5.3](05-patron-asincrono.md#53-flujo-end-to-end), con datos reales/stub de AMD en lugar de datos simulados de `mock-batch`.
+> **Resiliencia (requisito transversal)**: la descarga de detalle corre en goroutines concurrentes (límite `NEXUS_AMD_DETAIL_CONCURRENCY`, por defecto 10). Cada goroutine **recupera sus propios pánicos** — la recuperación del Job Manager (`callExecute`) solo cubre la goroutine de `Execute`, no las que la integración lanza, así que un pánico procesando una minuta se traduce en un ítem `FAILED` revisable en vez de tumbar el proceso de Nexus. Además, el motivo de un job `FAILED` se persiste en `result_summary.error` y se expone en `GET /jobs/{job_id}`, para poder revisar qué ocurrió sin leer logs. *(Hallazgo corregido durante la prueba local: la primera versión lanzaba las goroutines sin recuperación propia y un pánico tumbaba el servicio, dejando el job colgado en `RUNNING`.)*
+>
+> **Adelanto parcial de la Fase 9**: las credenciales de salida hacia AMD ya se persisten en la tabla `external_credentials` **cifradas en reposo** con AES-256-GCM (`internal/credentials`, clave desde `NEXUS_CRED_KEY`). En ambiente `dev` sin `NEXUS_CRED_KEY` se guardan sin cifrar (placeholder, con advertencia en el log); fuera de `dev` la clave es obligatoria. La separación formal por ambiente y la revisión de redacción de logs se completan en la Fase 9.
+>
+> **Pendiente de esta integración**: (a) entrega `push_db` real hacia SGP; (b) notificación de estado de vuelta a AMD por cada minuta procesada (paso 12 de [§5.3](05-patron-asincrono.md#53-flujo-end-to-end)); (c) afinar las reglas de validación de negocio (hoy son estructurales).
+
+**Criterio de aceptación**: el flujo replica el descrito en [Patrón Asíncrono §5.3](05-patron-asincrono.md#53-flujo-end-to-end) hasta la entrega por `pull_api`, con datos reales/stub de AMD en lugar de `mock-batch`. ✅ Verificado con pruebas automatizadas (paquetes `internal/integrations/amd`, `internal/credentials`, `internal/storage/sqlite`, `internal/api`).
 
 ---
 

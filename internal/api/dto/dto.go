@@ -75,6 +75,10 @@ type JobStatusResponse struct {
 	UpdatedAt     string      `json:"updated_at"`
 	FinishedAt    *string     `json:"finished_at"`
 	ResultURL     string      `json:"result_url,omitempty"`
+	// ResultSummary resume el desenlace: {total,processed,failed} si terminó
+	// bien, o {error} si el job falló — útil para revisar qué ocurrió sin
+	// consultar logs. Ausente mientras el job no termina.
+	ResultSummary any `json:"result_summary,omitempty"`
 }
 
 type JobItemResponse struct {
@@ -97,4 +101,24 @@ type JobResultResponse struct {
 	IntegrationID string            `json:"integration_id"`
 	Summary       JobResultSummary  `json:"summary"`
 	Items         []JobItemResponse `json:"items"`
+}
+
+// JobListItem es un job en el listado GET /jobs (resumen, sin ítems de detalle).
+type JobListItem struct {
+	JobID         string      `json:"job_id"`
+	IntegrationID string      `json:"integration_id"`
+	CorrelationID string      `json:"correlation_id"`
+	Status        string      `json:"status"`
+	Progress      JobProgress `json:"progress"`
+	CreatedAt     string      `json:"created_at"`
+	UpdatedAt     string      `json:"updated_at"`
+	FinishedAt    *string     `json:"finished_at"`
+}
+
+// JobListResponse es la respuesta paginada de GET /jobs — ver
+// docs/03-contrato-api-rest.md §3.10.
+type JobListResponse struct {
+	Items      []JobListItem `json:"items"`
+	NextCursor string        `json:"next_cursor,omitempty"`
+	HasMore    bool          `json:"has_more"`
 }

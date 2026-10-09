@@ -64,6 +64,7 @@ func NewRouter(deps Deps) http.Handler {
 	mux.Handle("POST /api/v1/integrations/{integration_id}/send",
 		authn(handlers.Send(deps.Registry, deps.JobManager, deps.AuditStore, deps.Idempotency, deps.BasePath, deps.Logger)))
 	mux.Handle("GET /api/v1/integrations", authn(handlers.Catalog(deps.CatalogStore, deps.Logger)))
+	mux.Handle("GET /api/v1/jobs", authn(handlers.JobList(deps.JobStore, deps.Logger)))
 	mux.Handle("GET /api/v1/jobs/{job_id}", authn(handlers.JobStatus(deps.JobStore, deps.BasePath, deps.Logger)))
 	mux.Handle("GET /api/v1/jobs/{job_id}/result", authn(handlers.JobResult(deps.JobStore, deps.Logger)))
 	mux.Handle("POST /api/v1/jobs/{job_id}/ack", authn(handlers.JobAck(deps.JobStore, deps.Logger)))

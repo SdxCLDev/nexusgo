@@ -3,6 +3,7 @@ package jobs
 import (
 	"context"
 	"fmt"
+	"sort"
 	"sync"
 	"time"
 )
@@ -114,4 +115,32 @@ func (s *InMemoryStore) ListItems(ctx context.Context, jobID string) ([]Item, er
 	result := make([]Item, len(items))
 	copy(result, items)
 	return result, nil
+}
+
+func (s *InMemoryStore) List(ctx context.Context, integrationID string, limit, offset int) ([]Job, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	filtered := make([]Job, 0, len(s.jobs))
+	for _, job := range s.jobs {
+		if integrationID == "" || job.IntegrationID == integrationID {
+			filtered = append(filtered, *job)
+		}
+	}
+	// Más reciente primero; desempate estable por job_id.
+	sort.Slice(filtered, func(i, j int) bool {
+		if !filtered[i].CreatedAt.Equal(filtered[j].CreatedAt) {
+			return filtered[i].CreatedAt.After(filtered[j].CreatedAt)
+		}
+		return filtered[i].ID > filtered[j].ID
+	})
+
+	if offset >= len(filtered) {
+		return []Job{}, nil
+	}
+	end := offset + limit
+	if end > len(filtered) {
+		end = len(filtered)
+	}
+	return filtered[offset:end], nil
 }

@@ -3,12 +3,14 @@ package sqlite_test
 import (
 	"context"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"nexusgo/internal/audit"
 	"nexusgo/internal/auth"
 	"nexusgo/internal/core"
+	"nexusgo/internal/credentials"
 	"nexusgo/internal/jobs"
 	"nexusgo/internal/storage/sqlite"
 )
@@ -35,9 +37,61 @@ func TestOpen_AppliesMigrationsIdempotently(t *testing.T) {
 	if err := db2.QueryRowContext(ctx, `SELECT COUNT(1) FROM schema_migrations`).Scan(&count); err != nil {
 		t.Fatalf("no se pudo leer schema_migrations: %v", err)
 	}
-	const expectedMigrations = 6 // clients, integrations, audit_log, jobs, job_items, sgp_simulated_inbox
+	const expectedMigrations = 7 // clients, integrations, audit_log, jobs, job_items, sgp_simulated_inbox, external_credentials
 	if count != expectedMigrations {
 		t.Errorf("se esperaban %d migraciones aplicadas, hay %d", expectedMigrations, count)
+	}
+}
+
+func TestCredentialStore_UpsertGetAndEncryptsAtRest(t *testing.T) {
+	ctx := context.Background()
+	dbPath := filepath.Join(t.TempDir(), "nexus-test.db")
+	db, err := sqlite.Open(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("sqlite.Open: %v", err)
+	}
+	defer db.Close()
+
+	cipher, err := credentials.NewAESGCMCipher("clave-test")
+	if err != nil {
+		t.Fatalf("NewAESGCMCipher: %v", err)
+	}
+	store := sqlite.NewCredentialStore(db, cipher)
+
+	cred := credentials.Credential{
+		ExternalSystem: "AMD",
+		Type:           credentials.TypeBasic,
+		Environment:    "dev", // en minúsculas: el store debe normalizar a DEV
+		Payload:        map[string]string{"user": "admin", "password": "secreta"},
+	}
+	if err := store.Upsert(ctx, cred); err != nil {
+		t.Fatalf("Upsert: %v", err)
+	}
+
+	got, found, err := store.Get(ctx, "AMD", "dev")
+	if err != nil || !found {
+		t.Fatalf("Get: found=%v err=%v", found, err)
+	}
+	if got.Get("user") != "admin" || got.Get("password") != "secreta" {
+		t.Errorf("payload descifrado inesperado: %+v", got.Payload)
+	}
+	if got.Environment != "DEV" {
+		t.Errorf("environment = %q, se esperaba DEV (normalizado a mayúsculas)", got.Environment)
+	}
+
+	// Cifrado en reposo: el valor crudo en la tabla no debe contener la clave.
+	var stored string
+	if err := db.QueryRowContext(ctx,
+		`SELECT encrypted_payload FROM external_credentials WHERE external_system='AMD' AND environment='DEV'`,
+	).Scan(&stored); err != nil {
+		t.Fatalf("lectura cruda: %v", err)
+	}
+	if strings.Contains(stored, "secreta") {
+		t.Error("la contraseña no debería almacenarse en claro en external_credentials")
+	}
+
+	if _, found, _ := store.Get(ctx, "SAP", "dev"); found {
+		t.Error("no debería encontrar credenciales inexistentes (SAP)")
 	}
 }
 

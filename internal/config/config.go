@@ -46,6 +46,25 @@ type Config struct {
 	// el spec OpenAPI y la página de Swagger UI) de forma que funcionen a
 	// través del proxy. Vacío por defecto (sin proxy, o proxy en la raíz).
 	PublicBasePath string
+
+	// CredentialKey es el secreto con que se cifran en reposo las credenciales
+	// externas (ver internal/credentials y docs/06-autenticacion-seguridad.md
+	// §6.4). Vacío solo se acepta en 'dev' (se guardan sin cifrar).
+	CredentialKey string
+
+	// AMD es la configuración de conexión hacia el sistema externo AMD — ver
+	// docs/05-patron-asincrono.md. Solo BaseURL cambia por ambiente; User y
+	// Password se usan únicamente para sembrar external_credentials al arrancar.
+	AMD AMDConfig
+}
+
+// AMDConfig agrupa la configuración de la integración con AMD.
+type AMDConfig struct {
+	BaseURL           string
+	User              string
+	Password          string
+	Timeout           time.Duration
+	DetailConcurrency int
 }
 
 func Load() (*Config, error) {
@@ -76,6 +95,16 @@ func Load() (*Config, error) {
 		return nil, err
 	}
 
+	amdTimeoutSeconds, err := getEnvInt("NEXUS_AMD_TIMEOUT_SECONDS", 30)
+	if err != nil {
+		return nil, err
+	}
+
+	amdDetailConcurrency, err := getEnvInt("NEXUS_AMD_DETAIL_CONCURRENCY", 10)
+	if err != nil {
+		return nil, err
+	}
+
 	return &Config{
 		Env:            env,
 		HTTPAddr:       getEnv("NEXUS_HTTP_ADDR", ":8080"),
@@ -87,6 +116,14 @@ func Load() (*Config, error) {
 		IdempotencyTTL: time.Duration(idempotencyTTLHours) * time.Hour,
 		JobConcurrency: jobConcurrency,
 		PublicBasePath: normalizeBasePath(getEnv("NEXUS_PUBLIC_BASE_PATH", "")),
+		CredentialKey:  getEnv("NEXUS_CRED_KEY", ""),
+		AMD: AMDConfig{
+			BaseURL:           getEnv("NEXUS_AMD_BASE_URL", "https://amddev.sodexhochile.cl"),
+			User:              getEnv("NEXUS_AMD_USER", ""),
+			Password:          getEnv("NEXUS_AMD_PASSWORD", ""),
+			Timeout:           time.Duration(amdTimeoutSeconds) * time.Second,
+			DetailConcurrency: amdDetailConcurrency,
+		},
 	}, nil
 }
 
