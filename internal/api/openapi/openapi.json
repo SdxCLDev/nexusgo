@@ -141,6 +141,11 @@
           "result_url": {
             "type": "string",
             "description": "Solo presente si el job terminó y su delivery_mode es pull_api."
+          },
+          "result_summary": {
+            "type": "object",
+            "additionalProperties": true,
+            "description": "Resumen del desenlace: {total,processed,failed} si terminó bien, o {error} si falló. Ausente mientras el job no termina."
           }
         }
       },
@@ -171,6 +176,30 @@
             "type": "array",
             "items": { "$ref": "#/components/schemas/JobItemResponse" }
           }
+        }
+      },
+      "JobListItem": {
+        "type": "object",
+        "properties": {
+          "job_id": { "type": "string" },
+          "integration_id": { "type": "string" },
+          "correlation_id": { "type": "string" },
+          "status": { "type": "string", "enum": ["PENDING", "RUNNING", "COMPLETED", "FAILED", "PARTIAL"] },
+          "progress": { "$ref": "#/components/schemas/JobProgress" },
+          "created_at": { "type": "string", "format": "date-time" },
+          "updated_at": { "type": "string", "format": "date-time" },
+          "finished_at": { "type": "string", "format": "date-time", "nullable": true }
+        }
+      },
+      "JobListResponse": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/JobListItem" }
+          },
+          "next_cursor": { "type": "string", "description": "Cursor para la página siguiente (omitido si no hay más)." },
+          "has_more": { "type": "boolean" }
         }
       }
     },
@@ -258,6 +287,24 @@
           "422": { "description": "El sistema externo rechazó la solicitud por una regla de negocio.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
           "502": { "description": "Error de comunicación con el sistema externo.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
           "503": { "description": "Integración no disponible.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
+        }
+      }
+    },
+    "/api/v1/jobs": {
+      "get": {
+        "tags": ["jobs"],
+        "summary": "Lista jobs (filtrable por integration_id, del más reciente al más antiguo)",
+        "description": "Permite descubrir ejecuciones pasadas sin conocer el job_id. Paginación por cursor — ver docs/03-contrato-api-rest.md §3.10.",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          { "name": "integration_id", "in": "query", "required": false, "schema": { "type": "string" }, "example": "amd-to-sgp-descarga-minuta" },
+          { "name": "limit", "in": "query", "required": false, "schema": { "type": "integer", "default": 50, "maximum": 200 } },
+          { "name": "cursor", "in": "query", "required": false, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": { "description": "Listado de jobs.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/JobListResponse" } } } },
+          "400": { "description": "limit o cursor inválido.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+          "401": { "$ref": "#/components/responses/Unauthorized" }
         }
       }
     },

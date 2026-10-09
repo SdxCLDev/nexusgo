@@ -115,7 +115,10 @@ func (m *Manager) run(integration core.AsyncIntegration, jobID, auditID, correla
 
 	if execErr != nil {
 		m.logger.Error("job finalizado con error", "job_id", jobID, "error", execErr)
-		if err := m.jobStore.Finish(ctx, jobID, jobs.StatusFailed, nil, finishedAt); err != nil {
+		// Persistir el motivo en result_summary para que sea revisable vía
+		// GET /jobs/{id} sin depender del log técnico ni de la auditoría.
+		failureSummary := map[string]any{"error": execErr.Error()}
+		if err := m.jobStore.Finish(ctx, jobID, jobs.StatusFailed, failureSummary, finishedAt); err != nil {
 			m.logger.Error("no se pudo finalizar el job", "job_id", jobID, "error", err)
 		}
 		if err := m.auditStore.Finish(ctx, auditID, audit.StatusFailed, nil, execErr.Error(), finishedAt); err != nil {

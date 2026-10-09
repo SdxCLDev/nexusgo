@@ -94,7 +94,18 @@ func (s *JobStore) Ack(ctx context.Context, jobID string, ackedAt time.Time) err
 	return nil
 }
 
-func (s *JobStore) Get(ctx context.Context, jobID string) (jobs.Job, bool, error) {
+// jobColumns es la lista de columnas que scanJob espera, en orden. Se comparte
+// entre Get y List para que ambos usen el mismo escaneo.
+const jobColumns = `job_id, integration_id, correlation_id, client_id, status, delivery_mode,
+	progress_total, progress_processed, progress_failed, result_summary,
+	created_at, updated_at, finished_at, acked_at`
+
+// rowScanner lo satisfacen tanto *sql.Row como *sql.Rows.
+type rowScanner interface {
+	Scan(dest ...any) error
+}
+
+func scanJob(sc rowScanner) (jobs.Job, error) {
 	var j jobs.Job
 	var status, deliveryMode string
 	var progressTotal sql.NullInt64
@@ -102,21 +113,12 @@ func (s *JobStore) Get(ctx context.Context, jobID string) (jobs.Job, bool, error
 	var createdAtStr, updatedAtStr string
 	var finishedAtStr, ackedAtStr sql.NullString
 
-	err := s.db.QueryRowContext(ctx, `
-		SELECT job_id, integration_id, correlation_id, client_id, status, delivery_mode,
-		       progress_total, progress_processed, progress_failed, result_summary,
-		       created_at, updated_at, finished_at, acked_at
-		FROM jobs WHERE job_id = ?
-	`, jobID).Scan(
+	if err := sc.Scan(
 		&j.ID, &j.IntegrationID, &j.CorrelationID, &j.ClientID, &status, &deliveryMode,
 		&progressTotal, &j.ProgressProcessed, &j.ProgressFailed, &resultSummaryText,
 		&createdAtStr, &updatedAtStr, &finishedAtStr, &ackedAtStr,
-	)
-	if errors.Is(err, sql.ErrNoRows) {
-		return jobs.Job{}, false, nil
-	}
-	if err != nil {
-		return jobs.Job{}, false, fmt.Errorf("sqlite: error buscando el job %q: %w", jobID, err)
+	); err != nil {
+		return jobs.Job{}, err
 	}
 
 	j.Status = jobs.Status(status)
@@ -141,8 +143,44 @@ func (s *JobStore) Get(ctx context.Context, jobID string) (jobs.Job, bool, error
 		t, _ := time.Parse(time.RFC3339, ackedAtStr.String)
 		j.AckedAt = &t
 	}
+	return j, nil
+}
 
+func (s *JobStore) Get(ctx context.Context, jobID string) (jobs.Job, bool, error) {
+	row := s.db.QueryRowContext(ctx, `SELECT `+jobColumns+` FROM jobs WHERE job_id = ?`, jobID)
+	j, err := scanJob(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return jobs.Job{}, false, nil
+	}
+	if err != nil {
+		return jobs.Job{}, false, fmt.Errorf("sqlite: error buscando el job %q: %w", jobID, err)
+	}
 	return j, true, nil
+}
+
+// List devuelve jobs del más reciente al más antiguo, filtrando por
+// integration_id cuando no está vacío — ver docs/03-contrato-api-rest.md §3.10.
+func (s *JobStore) List(ctx context.Context, integrationID string, limit, offset int) ([]jobs.Job, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT `+jobColumns+` FROM jobs
+		WHERE (? = '' OR integration_id = ?)
+		ORDER BY created_at DESC, job_id DESC
+		LIMIT ? OFFSET ?
+	`, integrationID, integrationID, limit, offset)
+	if err != nil {
+		return nil, fmt.Errorf("sqlite: no se pudieron listar los jobs: %w", err)
+	}
+	defer rows.Close()
+
+	result := make([]jobs.Job, 0, limit)
+	for rows.Next() {
+		j, err := scanJob(rows)
+		if err != nil {
+			return nil, fmt.Errorf("sqlite: error leyendo jobs: %w", err)
+		}
+		result = append(result, j)
+	}
+	return result, rows.Err()
 }
 
 func (s *JobStore) AddItem(ctx context.Context, item jobs.Item) error {

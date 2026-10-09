@@ -29,6 +29,12 @@ Variables de entorno (todas opcionales en ambiente `dev`; `NEXUS_JWT_SECRET` y `
 | `NEXUS_SGP_API_KEY` | `sgp-dev-local-key` | API Key del cliente `sgp`, sembrado en SQLite en cada arranque. |
 | `NEXUS_JOB_CONCURRENCY` | `5` | Cantidad máxima de jobs asíncronos ejecutándose en paralelo. |
 | `NEXUS_PUBLIC_BASE_PATH` | *(vacío)* | Prefijo si Nexus se publica detrás de un reverse proxy en un sub-path (ej. `/nexus`). Ver [Despliegue en Linux](#despliegue-en-linux-systemd--nginx-reverse-proxy) más abajo. |
+| `NEXUS_CRED_KEY` | *(vacío en `dev`)* | Clave para cifrar en reposo (AES-256-GCM) las credenciales externas (`internal/credentials`). Obligatoria fuera de `dev`; sin ella en `dev` se guardan sin cifrar (con advertencia). |
+| `NEXUS_AMD_BASE_URL` | `https://amddev.sodexhochile.cl` | Base URL de AMD (cambia por ambiente). |
+| `NEXUS_AMD_USER` | *(vacío)* | Usuario de servicio de AMD; se siembra (cifrado) en `external_credentials` al arrancar. |
+| `NEXUS_AMD_PASSWORD` | *(vacío)* | Clave del usuario de servicio de AMD. |
+| `NEXUS_AMD_TIMEOUT_SECONDS` | `30` | Timeout de cada llamada HTTP a AMD. |
+| `NEXUS_AMD_DETAIL_CONCURRENCY` | `10` | Máximo de consultas de detalle de minuta en paralelo hacia AMD. |
 
 ### Probar la autenticación y la integración síncrona de prueba
 
@@ -64,6 +70,28 @@ curl -s -X POST http://localhost:8080/api/v1/jobs/<job_id>/ack -H "Authorization
 ```
 
 `mock-batch-push` usa el mismo contrato pero simula el modo `delivery_mode=push_db`: no expone `result_url` y en cambio inserta los registros exitosos en una tabla SQLite `sgp_simulated_inbox` que hace las veces de la base de datos de SGP (ver `docs/05-patron-asincrono.md` §5.5).
+
+### Probar la integración real con AMD (descarga de minutas)
+
+Requiere credenciales de AMD (`NEXUS_AMD_USER`/`NEXUS_AMD_PASSWORD`) y, salvo en `dev`, `NEXUS_CRED_KEY`. Ver la ficha en [`docs/ficha-amd-to-sgp-descarga-minuta.md`](docs/ficha-amd-to-sgp-descarga-minuta.md).
+
+```bash
+# 1. Disparar la descarga (sin filtros: procesa todas las minutas pendientes)
+curl -s -X POST http://localhost:8080/api/v1/integrations/amd-to-sgp-descarga-minuta/send \
+  -H "Authorization: Bearer <access_token>" -H "Content-Type: application/json" \
+  -d '{"source_system":"SGP","timestamp":"2026-10-09T12:00:00Z","payload":{}}'
+# -> 202 Accepted con job_id y status_url
+
+# 2. Polling del estado
+curl -s http://localhost:8080/api/v1/jobs/<job_id> -H "Authorization: Bearer <access_token>"
+
+# 3. Revisar las minutas descargadas (una por ítem; external_id = id_minuta)
+curl -s http://localhost:8080/api/v1/jobs/<job_id>/result -H "Authorization: Bearer <access_token>"
+
+# 4. Descubrir descargas pasadas sin recordar el job_id
+curl -s "http://localhost:8080/api/v1/jobs?integration_id=amd-to-sgp-descarga-minuta" \
+  -H "Authorization: Bearer <access_token>"
+```
 
 Comandos útiles:
 

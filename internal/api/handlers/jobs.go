@@ -42,6 +42,7 @@ func jobStatusResponse(job jobs.Job, basePath string) dto.JobStatusResponse {
 	if isTerminal(job.Status) && job.DeliveryMode == jobs.DeliveryPullAPI {
 		resp.ResultURL = basePath + "/api/v1/jobs/" + job.ID + "/result"
 	}
+	resp.ResultSummary = job.ResultSummary
 	return resp
 }
 

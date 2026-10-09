@@ -816,6 +816,53 @@ func TestSend_Async_PushDBDeliveryMode(t *testing.T) {
 	}
 }
 
+func TestJobList_PaginationAndFilter(t *testing.T) {
+	asyncInt := &asyncStubIntegration{
+		meta:    core.Metadata{ID: "stub-async-list", Mode: core.ModeAsync, DeliveryMode: jobs.DeliveryPullAPI},
+		execute: func(run *jobs.Run) error { return nil },
+	}
+	router, _, _ := newTestRouterWithJobs(t, newClientStore(), asyncInt)
+	token := testToken(t, "sgp", []string{"integration:stub-async-list:invoke"})
+
+	for i := 0; i < 2; i++ {
+		rec := doSend(t, router, token, "stub-async-list", `{"source_system":"SGP","timestamp":"2026-10-06T14:32:00Z","payload":{}}`)
+		if rec.Code != http.StatusAccepted {
+			t.Fatalf("submit %d: status = %d", i, rec.Code)
+		}
+		waitForJobTerminal(t, router, token, decodeJSON(t, rec)["job_id"].(string), 2*time.Second)
+	}
+
+	// Página 1 con limit=1: debe haber más.
+	page1 := decodeJSON(t, doGet(t, router, token, "/api/v1/jobs?integration_id=stub-async-list&limit=1"))
+	items1, _ := page1["items"].([]any)
+	if len(items1) != 1 {
+		t.Fatalf("página 1: se esperaba 1 ítem, hay %d", len(items1))
+	}
+	if page1["has_more"] != true {
+		t.Errorf("página 1: se esperaba has_more=true")
+	}
+	cursor, _ := page1["next_cursor"].(string)
+	if cursor == "" {
+		t.Fatal("página 1: se esperaba next_cursor")
+	}
+
+	// Página 2 siguiendo el cursor: última página.
+	page2 := decodeJSON(t, doGet(t, router, token, "/api/v1/jobs?integration_id=stub-async-list&limit=1&cursor="+cursor))
+	items2, _ := page2["items"].([]any)
+	if len(items2) != 1 {
+		t.Fatalf("página 2: se esperaba 1 ítem, hay %d", len(items2))
+	}
+	if page2["has_more"] != false {
+		t.Errorf("página 2: se esperaba has_more=false")
+	}
+
+	// Filtro por otra integración: vacío.
+	page3 := decodeJSON(t, doGet(t, router, token, "/api/v1/jobs?integration_id=otra-integracion"))
+	if items3, _ := page3["items"].([]any); len(items3) != 0 {
+		t.Errorf("filtro por otra integración: se esperaban 0 ítems, hay %d", len(items3))
+	}
+}
+
 func TestCatalog(t *testing.T) {
 	stub := &stubIntegration{meta: core.Metadata{ID: "stub-sync", Name: "Stub", Direction: core.DirectionOutbound, Mode: core.ModeSync, Version: "1.0"}}
 	router, _ := newTestRouter(t, newClientStore(), stub)

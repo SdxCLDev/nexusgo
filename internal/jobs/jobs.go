@@ -74,6 +74,11 @@ type Store interface {
 	Get(ctx context.Context, jobID string) (Job, bool, error)
 	AddItem(ctx context.Context, item Item) error
 	ListItems(ctx context.Context, jobID string) ([]Item, error)
+	// List devuelve jobs ordenados del más reciente al más antiguo, filtrados
+	// por integrationID si no está vacío, paginados con limit/offset — ver
+	// docs/03-contrato-api-rest.md §3.10. Se usa para descubrir descargas
+	// pasadas sin conocer el job_id de antemano.
+	List(ctx context.Context, integrationID string, limit, offset int) ([]Job, error)
 }
 
 // Run es el handle que una AsyncIntegration recibe mientras procesa un job,
